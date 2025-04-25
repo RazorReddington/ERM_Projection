@@ -13,7 +13,7 @@ import os
 
 
 #Set Working Directory
-os.chdir('/home/razorreddington/Documents/Project Q/Projects/Data')
+os.chdir('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data')
 
 ############## Data ################
 
@@ -70,9 +70,8 @@ for filename in master_input["HPI"]:
 valdate = "31/12/2024"
 
 proj_years = 50
-
 freq = 4
-
+proj_term = proj_years * freq + 1
 
 
 
@@ -95,14 +94,56 @@ olb_proj = pd.DataFrame(olb_proj)
 #################### Projection - Scenario Dependent ####################
 runlist = list(master_input['Name'])
 
+
+#Needs to be scenario dependent
+#for run in runlist:
+    #hpi_table= master_input['HPI']
+    
+    
+    
+
 base_property_values = list(mpf['Loan Amount']/mpf['LTV'])
 
-a = np.array(hpi_tables['base_HPI']['HPI'])
-a= a+1
+prop_test = []
+for i in range(len(mpf)):
+    i=1
+    property_value = base_property_values[i]
+    hpi = np.cumprod(1 + hpi_tables['base_HPI']['HPI'])
+    property_projection = property_value*hpi
+    prop_test.append(property_projection)
+    
+    #Mortality
+    
+    gender1 = mpf['Gender 1'][i]
+    age1 = mpf['Age 1'][i]
+    mort = mortality_tables['base_mortality']
+    mort_array = mort[mort[gender1]]
+    
+    index = np.array(range(0,proj_term))
+    age1_projection = pd.DataFrame(np.floor(age1 + index/freq), columns = ['Age'])
+    
+    test = pd.merge(age1_projection,mort,on='Age', how='left')
+    f = mort[mort['Age']==77][gender1]
+    g = mort.loc['Age']
+    test = []
+    for i in age1_projection:
+        i=77
+        a = mort[i][gender1]
+        
+        
+    #age1_projection[]
+    #age1_projection = [age if != freq else age + 1, age in enumerate()]
+   
+    
+    mod = np.mod(index,freq)
+    test = (1 - mort)**(1/freq)
 
-b = base_property_values[0]
+    if mpf['Joint Life'][i] == "Joint Life":
+        gender2 = mpf['Gender 2'][i]
+        age2 = mpf['Age 2'][i]
+        
 
-b*a
+
 
 for run in runlist:
     indexed_property_values = base_property_values    
@@ -126,7 +167,7 @@ for run in runlist:
 mortimportlist = []
 verimportlist = []
 hpiimportlist = []
-n = len(runnames)
+n = len(runlist)
 for i in range(n):
     mort_table = master_input["Mortality Table"][i]
     ver_table = master_input["VER Table"][i]
