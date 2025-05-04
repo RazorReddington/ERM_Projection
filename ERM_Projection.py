@@ -2,7 +2,7 @@
 """
 Created on Fri Apr 11 21:47:54 2025
 
-@author: UG423NJ
+@author: Ed Nancarrow
 """
 
 #Packages
@@ -13,8 +13,8 @@ import os
 
 
 #Set Working Directory
-os.chdir('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data')
-
+#os.chdir('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data')
+os.chdir('/home/razorreddington/Documents/GitHub/ERM_Projection/Data')
 ############## Data ################
 
 
@@ -78,27 +78,53 @@ for i in range(1,n+1): #possibly a more efficient way of doing this
 olb_proj = pd.DataFrame(olb_proj)
 
 
+#Calculate t=0 property values 
+base_property_values = list(mpf['Loan Amount']/mpf['LTV'])
+
+
 #################### Projection - Scenario Dependent ####################
 runlist = list(master_input['Name'])
 
 
 ######### Model Point Agnostic #############
 
-#HPI projection
+#---------------HPI Projection------------------
 hpi = (1 + np.repeat(hpi_tables['base_HPI']['HPI'],freq))**(1/freq)
 hpi = np.cumprod(hpi)
 hpi.index = range(0,len(hpi)) #re-index
-    
-#Mortality Projection
-mortality = mortality_tables['base_mortality']
 
+
+#-------------Decrement Projection-----------------   
+
+#Assign scenario decrement tables - needs addressing when expanding to multiple scenarios
+mortality = mortality_tables['base_mortality']
+ver = ver_tables['base_VER']
+
+
+###################
+youngest = min(mortality['Age'])
+oldest = max(mortality['Age'])
+
+female_decrements = {} #empty dictionary to store decrement probabilities
+male_decrements = {}
+for i in range(len(mortality)):
+    mort_survival_female = (1-mortality['F'][i:]).cumprod() #calculate mortality survival probabilities 
+    ver_survival_female = (1 - ver['F'][i:]).cumprod() #calculate ver survival  - THIS IS WRONG
+    survival_female = mort_survival_female * ver_survival_female #calculate total survival probabilities
+    female_decrements[i + youngest] = survival_female #Add to the dictionary
+    
+    mort_survival_male = (1-mortality['M'][i:]).cumprod()
+    ver_survival_male = (1 - ver['M'][i:]).cumprod() 
+    survival_male = mort_survival_male * ver_survival_male
+    male_decrements[i + youngest] = survival_male
+
+###############
+
+'''
 #convert to mortality survival rates
 mort_survival_female = (1-mortality['F']).cumprod() 
 mort_survival_male = (1-mortality['M']).cumprod() 
 
-
-#VER Projection
-ver = ver_tables['base_VER']
 
 #convert to ver survival rates
 ver_survival_female = (1 - ver['F']).cumprod()
@@ -116,22 +142,22 @@ female_decrements= [survival_female[i-1] - survival_female[i] if i >0 else 1 - s
 male_decrements = [survival_male[i-1] - survival_male[i] if i >0 else 1 - survival_male[i] for  i in range(n) ]
 decrements = pd.DataFrame({'Age':mortality['Age'], 'M': male_decrements, 'F': female_decrements})
 
+
 #Reproduce decrement table based on the valuation frequency
 decrements = pd.concat([decrements]*freq)
 decrements['M'] = decrements['M']/freq
 decrements['F'] = decrements['F']/freq
 decrements = decrements.sort_index(ascending=True)
 
+
 #Check
 np.round(np.sum(decrements['M']),8) == 1
 np.round(np.sum(decrements['F']),8) == 1
-
+'''
 #need to allow for settlement delay
 
 
 
-#Calculate t=0 property values 
-base_property_values = list(mpf['Loan Amount']/mpf['LTV'])
 
 #Project property values using HPI
 n = len(base_property_values)
@@ -140,39 +166,47 @@ property_projection = [base_property_values[i] * hpi for i in range(n)]
 
 #Cylce Through model points
 
-prop_test = []
+something = []
 for i in range(len(mpf)):
-    i=1
-    property_projection[i]
-    prop_test.append(property_projection)
+    ##i=1 #remove
+
+    #Model Point Financials
+    ith_prop_proj = property_projection[i] #Property projection
+    ith_olb_proj = olb_proj[i] #OLB Projection
     
-    #Mortality
+    #Allow for NNEG - currently assumes instrinsic calculation (no time dependency)
+    ith_olb_proj_nneg = pd.Series([ith_olb_proj[i] if ith_olb_proj[i] <= ith_prop_proj[i] else ith_prop_proj[i] for i in range(len(ith_olb_proj))])
+    
+    #Model Point Demographics - Life 1
     gender1 = mpf['Gender 1'][i]
     age1 = mpf['Age 1'][i]
     
-    #calculation
+    if gennder
+    female_decrements[50]
     
-    current_olb = olb_proj[i]
+    ith_decrement_proj = pd.Series(decrements.loc[decrements['Age']>=age1][gender1])
+    ith_decrement_proj.index = range(0,len(ith_decrement_proj))
+  
     
-    current_mort = mortality.loc[mortality['Age']>=age1][gender1] #Slice the mortality table based on modelpoint demographic
-    current_mort.index = range(1,1 + len(current_mort)) #reset the index to start at 1
-    #need current mort to have for 1, then trailing 0's
+  
     
-    mort_income = current_olb * current_mort #calculate expected income after allowing for mortality
-    mort_income[np.isnan(mort_income)] = 0
+  
+    np.sum(ith_decrement_proj)
+  
+    #Calculate Cashflows
+    mp_cfs = ith_olb_proj_nneg * ith_decrement_proj
+    mp_cfs[np.isnan(mp_cfs)] = 0
+    
+    #Sense Check
+    np.sum(mp_cfs) - ith_olb_proj[0]
     
     
-    #VER
-    current_ver = ver.loc[ver['Age']>=age1][gender1] #Slice the VER table based on modelpoint demographic
-    current_ver.index = range(1,1 + len(current_ver)) #reset the index to start at 1
     
-    ver_income = current_olb * current_ver #calculate expected income after allowing for mortality
-    ver_income[np.isnan(ver_income)] = 0
     
-
+    '''
     if mpf['Joint Life'][i] == "Joint Life":
         gender2 = mpf['Gender 2'][i]
         age2 = mpf['Age 2'][i]
-        
+    '''      
 
 
