@@ -91,51 +91,43 @@ hpi.index = range(0,len(hpi)) #re-index
     
 #Mortality Projection
 mortality = mortality_tables['base_mortality']
-n = len(mortality)
 
 #convert to mortality survival rates
-mort_survival_female = [np.prod(1-mortality['F'].iloc[:i + 1]) for i in range(n)] #calculate survival rates using list comprehension
-mort_survival_male = (1-mortality['M']).cumprod() #calculate survival rates using pandas
-
-#Reproduce mortality rates by period - i.e., quarterly, monthly etc.
-mort_survival_male = (np.repeat(mort_survival_male,freq))**(1/freq)
-mort_survival_male.index = range(0,len(mort_survival_male + 1)) #re-index expanded table
-mort_survival_female = (np.repeat(mort_survival_female,freq))**(1/freq)
-mort_survival_female.index = range(0,len(mort_survival_female + 1))
+mort_survival_female = (1-mortality['F']).cumprod() 
+mort_survival_male = (1-mortality['M']).cumprod() 
 
 
 #VER Projection
 ver = ver_tables['base_VER']
-n = len(ver)
 
 #convert to ver survival rates
 ver_survival_female = (1 - ver['F']).cumprod()
-ver_survival_male = [np.prod(1-ver['M'].iloc[:i+1]) for i in range (n)]
-
-#Reproduce ver rates by period - i.e., quarterly, monthly etc.
-'''
-mort_survival_male = (np.repeat(mort_survival_male,freq))**(1/freq)
-mort_survival_male.index = range(0,len(mort_survival_male + 1)) #re-index expanded table
-mort_survival_female = (np.repeat(mort_survival_female,freq))**(1/freq)
-mort_survival_female.index = range(0,len(mort_survival_female + 1))
-'''
+ver_survival_male = (1 - ver['M']).cumprod()
 
 
 #Calculate all exit survival rates
 survival_female = mort_survival_female * ver_survival_female
 survival_male = mort_survival_male * ver_survival_male
 
+
 #Construct decrements table
+n = len(survival_female)
 female_decrements= [survival_female[i-1] - survival_female[i] if i >0 else 1 - survival_female[i] for  i in range(n) ]
 male_decrements = [survival_male[i-1] - survival_male[i] if i >0 else 1 - survival_male[i] for  i in range(n) ]
 decrements = pd.DataFrame({'Age':mortality['Age'], 'M': male_decrements, 'F': female_decrements})
+
+#Reproduce decrement table based on the valuation frequency
+decrements = pd.concat([decrements]*freq)
+decrements['M'] = decrements['M']/freq
+decrements['F'] = decrements['F']/freq
+decrements = decrements.sort_index(ascending=True)
 
 #Check
 np.round(np.sum(decrements['M']),8) == 1
 np.round(np.sum(decrements['F']),8) == 1
 
 #need to allow for settlement delay
-#need to extend size of table 
+
 
 
 #Calculate t=0 property values 
