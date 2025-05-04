@@ -105,19 +105,31 @@ ver = ver_tables['base_VER']
 youngest = min(mortality['Age'])
 oldest = max(mortality['Age'])
 
-female_decrements = {} #empty dictionary to store decrement probabilities
-male_decrements = {}
+female_decrement_table = {} #empty dictionary to store decrement probabilities
+male_decrement_table = {}
 for i in range(len(mortality)):
     mort_survival_female = (1-mortality['F'][i:]).cumprod() #calculate mortality survival probabilities 
-    ver_survival_female = (1 - ver['F'][i:]).cumprod() #calculate ver survival  - THIS IS WRONG
+    ver_survival_female = (1 - ver['F'][i:]).cumprod() #calculate ver survival  - THINK THIS IS WRONG
     survival_female = mort_survival_female * ver_survival_female #calculate total survival probabilities
-    female_decrements[i + youngest] = survival_female #Add to the dictionary
+    
+    
+    #This needs addressing
+    female_decrements= [survival_female[j-1] - survival_female[j] if j >0 else 1 - survival_female[j] for  j in range(len(survival_female)) ]
+    
+    
+    
+    
+    female_decrement_table[i + youngest] = female_decrements #Add to the dictionary
     
     mort_survival_male = (1-mortality['M'][i:]).cumprod()
     ver_survival_male = (1 - ver['M'][i:]).cumprod() 
     survival_male = mort_survival_male * ver_survival_male
-    male_decrements[i + youngest] = survival_male
+    male_decrements= [survival_male[j-1] - survival_male[i] if j >0 else 1 - survival_male[j] for  j in range(len(survival_male)) ]
+    male_decrement_table[i + youngest] = male_decrements #Add to the dictionary
+    
+np.sum(female_decrements)
 
+    ver_survival_female = (1 - ver['F'][5:]).cumprod() 
 ###############
 
 '''
@@ -181,9 +193,12 @@ for i in range(len(mpf)):
     gender1 = mpf['Gender 1'][i]
     age1 = mpf['Age 1'][i]
     
-    if gennder
-    female_decrements[50]
-    
+    if gender1 == 'F':
+        ith_decrement_proj = female_decrements[age1]
+    elif gender1 == 'M':
+        ith_decrement_proj = female_decrements[age1]
+        
+        
     ith_decrement_proj = pd.Series(decrements.loc[decrements['Age']>=age1][gender1])
     ith_decrement_proj.index = range(0,len(ith_decrement_proj))
   
