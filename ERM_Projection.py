@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 Created on Fri Apr 11 21:47:54 2025
-
 @author: Ed Nancarrow
 """
 
@@ -9,6 +8,12 @@ Created on Fri Apr 11 21:47:54 2025
 import numpy as np
 import pandas as pd
 import os
+#import csv
+
+
+import time
+# Record start time
+start_time = time.time()
 
 
 #Set Working Directory
@@ -22,9 +27,11 @@ master_input = pd.read_excel('Master_Input.ods')
 master_input = master_input[master_input['Run'] == 'Y']
 
 #Import MPF Data
-mpf = pd.read_excel('MPF.xlsx')
-#mpf = pd.concat([mpf]*1600)
-#mpf.index = range(0,len(mpf))
+#mpf = pd.read_excel('MPF_BIG.xlsx')
+#mpf = pd.read_excel('MPF.xlsx')
+mpf = pd.read_csv('MPF.csv')
+#(0.17*2000)/60
+
 
 #Clean MPF
 
@@ -55,7 +62,7 @@ for filename in master_input["HPI"]:
 ############## Parameters ##############
 
 valdate = "31/12/2024"
-
+output_filepath = 'output.xlsx'
 proj_years = 50
 freq = 4
 proj_term = proj_years * freq + 1
@@ -73,7 +80,7 @@ olb_proj = [] #initialise an empty list
 for i in range(1,n+1): #possibly a more efficient way of doing this
     olbi = olb_array*((1+eff_rate_array)**i)
     olb_proj.append(olbi)
-olb_proj = pd.DataFrame(olb_proj)
+olb_proj = pd.DataFrame(olb_proj)   
 
 
 #Calculate t=0 property values 
@@ -88,7 +95,7 @@ runlist = list(master_input['Name'])
 output_dictionary = {}
 #Loop Through All scenarios
 for j in range(len(runlist)):
-    
+    scenario = runlist[j]
     mortality = mortality_tables[master_input['Mortality Table'][j][:-4]]
     ver = ver_tables[master_input['VER Table'][j][:-4]]
     hpi = hpi_tables[master_input['HPI'][j][:-4]]
@@ -160,20 +167,25 @@ for j in range(len(runlist)):
         #np.sum(mp_cfs) - ith_olb_proj[0]
     
         #Allow for settlement delay
-        delayed_cfs = int(set_delay/freq)
+        delayed_cfs = int(set_delay*(freq/12))
         mp_cfs[delayed_cfs] = np.sum(mp_cfs[0:delayed_cfs+1])
         mp_cfs[0:delayed_cfs]=0
 
         #Append Income Cashflows for each model point
         income.append(mp_cfs)
-        
+        total_income = sum(income)
 
     #Output
-    output_dictionary = dict(scenario = runlist[i],income_cfs = income)
-    
-    
-        
-    
+    output_dictionary[runlist[j]] = total_income
+
+#Output results to an excel document
+my_output = pd.DataFrame(data = output_dictionary)
+my_output.to_excel(output_filepath)
+
+end_time = time.time()
+execution_time = end_time - start_time
+
+print(f"Script executed in {execution_time:.2f} seconds")
 
     
 '''
