@@ -17,8 +17,8 @@ start_time = time.time()
 
 
 #Set Working Directory
-#os.chdir('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data')
-os.chdir('/home/razorreddington/Documents/GitHub/ERM_Projection/Data')
+os.chdir('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data')
+#os.chdir('/home/razorreddington/Documents/GitHub/ERM_Projection/Data')
 ############## Data ################
 
 #Import Parameters
@@ -29,7 +29,8 @@ master_input = master_input[master_input['Run'] == 'Y']
 #Import MPF Data
 #mpf = pd.read_excel('MPF_BIG.xlsx')
 #mpf = pd.read_excel('MPF.xlsx')
-mpf = pd.read_csv('MPF.csv')
+#mpf = pd.read_csv('MPF.csv')
+mpf = pd.read_csv('MPF_BIG.csv')
 #(0.17*2000)/60
 
 
@@ -74,19 +75,14 @@ proj_term = proj_years * freq + 1
 #Project OLB
 olb_array = np.array(mpf['Loan Amount']) #current outstanding loan balance
 eff_rate_array = (1+np.array(mpf['AER']))**(1/freq)-1 #effective rate for each model point, allows for the projection frequency
-
 n = proj_years*freq #projection period
-olb_proj = [] #initialise an empty list
-for i in range(1,n+1): #possibly a more efficient way of doing this
-    olbi = olb_array*((1+eff_rate_array)**i)
-    olb_proj.append(olbi)
-olb_proj = pd.DataFrame(olb_proj)   
+periods = np.arange(1, n+1).reshape(-1, 1)  #Term factor vector
+growth_factors = (1 + eff_rate_array) ** periods 
 
+olb_proj = pd.DataFrame(olb_array * growth_factors) #Projected outstanding loan balance
 
-#Calculate t=0 property values 
-base_property_values = list(mpf['Loan Amount']/mpf['LTV'])
+base_property_values = list(mpf['Loan Amount']/mpf['LTV']) #Calculate t=0 property values 
 
-0.01*1600/60
 #################### Projection - Scenario Dependent ####################
 
 #Set the scenario list
@@ -136,51 +132,67 @@ for j in range(len(runlist)):
         male_decrement_table[i + youngest] = male_decrements #Add to the dictionary
         
 
-    #Project property values using HPI
-    #n = len(base_property_values)
-    #property_projection = [base_property_values[i] * hpi for i in range(n)]
-
-    
-    #Loop Through All Model Points
+ 
+    # Create an empty list to collect individual cashflows
     income = []
-    for i in range(len(mpf)):
-        
     
-        #Model Point Financials
-        ith_prop_proj = property_projection[i] #Property projection
-        ith_olb_proj = olb_proj[i] #OLB Projection
+    for i in range(len(mpf)):
+        #Produce economic projections for the ith model point
+        ith_prop_proj = np.array(property_projection[i])
+        ith_olb_proj = np.array(olb_proj[i])
         
-        #Allow for NNEG - currently assumes instrinsic calculation (no time dependency)
-        ith_olb_proj_nneg = pd.Series([ith_olb_proj[i] if ith_olb_proj[i] <= ith_prop_proj[i] else ith_prop_proj[i] for i in range(len(ith_olb_proj))])
-        
-        #Model Point Demographics - Life 1
+        # Get demographics for current model point
         gender1 = mpf['Gender 1'][i]
         age1 = mpf['Age 1'][i]
         
+        #Allow for NNEG
+        ith_olb_proj_nneg = np.minimum(ith_olb_proj, ith_prop_proj)
+        
+        # Get decrement projection based on gender and age
         if gender1 == 'F':
             ith_decrement_proj = female_decrement_table[age1]
-        elif gender1 == 'M':
+        else:  # gender1 == 'M'
             ith_decrement_proj = male_decrement_table[age1]
-    
-    
-        #Calculate Cashflows
-        mp_cfs = pd.Series(ith_olb_proj_nneg) * pd.Series(ith_decrement_proj)
-        mp_cfs[np.isnan(mp_cfs)] = 0
         
-        #Sense Check
-        #np.sum(mp_cfs) - ith_olb_proj[0]
-    
-        #Allow for settlement delay
-        delayed_cfs = int(set_delay*(freq/12))
-        mp_cfs[delayed_cfs] = np.sum(mp_cfs[0:delayed_cfs+1])
-        mp_cfs[0:delayed_cfs]=0
-
-        #Append Income Cashflows for each model point
+  
+            # Ensure same length
+            min_len = min(len(ith_olb_proj_nneg), len(ith_decrement_proj))
+            mp_cfs = ith_olb_proj_nneg[:min_len] * ith_decrement_proj[:min_len]
+            mp_cfs = np.nan_to_num(mp_cfs)
+            mp_cfs = pd.Series(mp_cfs)
+        
+        # Allow for settlement delay
+        delayed_cfs = int(set_delay * (freq/12))
+        if delayed_cfs > 0:
+            # Calculate sum of early cashflows
+            early_sum = mp_cfs.iloc[:delayed_cfs+1].sum()
+            
+            # Set early cashflows to zero
+            mp_cfs.iloc[:delayed_cfs] = 0
+            
+            # Set delayed position to the sum
+            if delayed_cfs < len(mp_cfs):
+                mp_cfs.iloc[delayed_cfs] = early_sum
+        
+        # Append to income list
         income.append(mp_cfs)
+    
+    # Calculate total income
+    try:
+        # Try pandas concat if all are series with compatible indexes
+        total_income = pd.concat(income).groupby(level=0).sum()
+    except:
+        # Fall back to simple sum if concat doesn't work
         total_income = sum(income)
-
-    #Output
+    
+    # Store in output dictionary
     output_dictionary[runlist[j]] = total_income
+    
+    
+
+
+    
+#########################################
 
 #Output results to an excel document
 my_output = pd.DataFrame(data = output_dictionary)

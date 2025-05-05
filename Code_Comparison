@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Mon May  5 17:03:54 2025
+
+@author: razorreddington
+"""
+
+###### My Code ###### 
+#Loop Through All Model Points
+
+income = []
+for i in range(len(mpf)):
+    
+
+    #Model Point Financials
+    ith_prop_proj = property_projection[i] #Property projection
+    ith_olb_proj = olb_proj[i] #OLB Projection
+    
+    #Allow for NNEG - currently assumes instrinsic calculation (no time dependency)
+    ith_olb_proj_nneg = pd.Series([ith_olb_proj[i] if ith_olb_proj[i] <= ith_prop_proj[i] else ith_prop_proj[i] for i in range(len(ith_olb_proj))])
+    
+    #Model Point Demographics - Life 1
+    gender1 = mpf['Gender 1'][i]
+    age1 = mpf['Age 1'][i]
+    
+    if gender1 == 'F':
+        ith_decrement_proj = female_decrement_table[age1]
+    elif gender1 == 'M':
+        ith_decrement_proj = male_decrement_table[age1]
+
+
+    #Calculate Cashflows
+    mp_cfs = pd.Series(ith_olb_proj_nneg) * pd.Series(ith_decrement_proj)
+    mp_cfs[np.isnan(mp_cfs)] = 0
+    
+    #Sense Check
+    #np.sum(mp_cfs) - ith_olb_proj[0]
+
+    #Allow for settlement delay
+    delayed_cfs = int(set_delay*(freq/12))
+    mp_cfs[delayed_cfs] = np.sum(mp_cfs[0:delayed_cfs+1])
+    mp_cfs[0:delayed_cfs]=0
+
+    #Append Income Cashflows for each model point
+    income.append(mp_cfs)
+    total_income = sum(income)
+
+#Output
+output_dictionary[runlist[j]] = total_income
+
+
+##### Claude Code ##### 
+# Create an empty list to collect individual cashflows
+income = []
+
+for i in range(len(mpf)):
+    # Get projections for current model point - keep as pandas objects if that's what they are
+    ith_prop_proj = property_projection[i]
+    ith_olb_proj = olb_proj[i]
+    
+    # Get demographics for current model point
+    gender1 = mpf['Gender 1'][i]
+    age1 = mpf['Age 1'][i]
+    
+    # NNEG calculation - using element-wise minimum but compatible with pandas
+    if isinstance(ith_olb_proj, pd.Series) and isinstance(ith_prop_proj, pd.Series):
+        # If they're pandas Series, use pandas methods
+        ith_olb_proj_nneg = pd.Series(np.minimum(ith_olb_proj.values, ith_prop_proj.values), 
+                                     index=ith_olb_proj.index)
+    else:
+        # If they're numpy    from numba import jit  # Add if available in your environment
+            
+            # Precompute constants
+            delayed_cfs = int(set_delay * (freq/12))
+            
+            # Convert decrement tables to numpy arrays for faster access
+            def prepare_decrement_table(table):
+                """Convert a pandas decrement table to a dictionary of numpy arrays for fast access"""
+                return {age: np.asarray(table[age]) for age in table.keys()}
+            
+            # Use this if you have numba available
+            @jit(nopython=True)
+            def process_cashflows(olb, prop, decrements, delayed_pos):
+                """Process cashflows with numba acceleration"""
+                # Ensure inputs are right size
+                min_len = min(len(olb), len(prop), len(decrements))
+                olb = olb[:min_len]
+                prop = prop[:min_len]
+                decrements = decrements[:min_len]
+                
+                # Calculate NNEG and cashflows
+                nneg_olb = np.minimum(olb, prop)
+                cfs = nneg_olb * decrements
+                
+                # Handle settlement delay
+                if delayed_pos > 0 and delayed_pos < len(cfs):
+                    early_sum = np.sum(cfs[:delayed_pos+1])
+                    cfs[:delayed_pos] = 0
+                    cfs[delayed_pos] = early_sum
+                    
+                return cfs
+            
+            # Convert tables once upfront
+            female_dec_np = prepare_decrement_table(female_decrement_table)
+            male_dec_np = prepare_decrement_table(male_decrement_table)
+            
+            # Preallocate result arrays for maximum efficiency
+            max_proj_length = max(len(olb_proj[i]) for i in range(len(olb_proj)))
+            result_matrix = np.zeros((len(mpf), max_proj_length))
+            
+            # Main loop with maximum optimization
+            for i in range(len(mpfnge(len(mpf)):
+            # Get p)):
+                gender1 = mpf['Gender 1'][i]
+                age1 = mpf['Age 1'][i]
+                
+                # Get numpy arrays for calculations
+                olb_arr = np.asarray(olb_proj[i])
+                prop_arr = np.asarray(property_projection[i])
+                
+                # Get appropriate decrement table
+                dec_arr = female_dec_np[age1] if gender1 == 'F' else male_dec_np[age1]
+                
+                try:
+                    # Try using numba if available
+                    cfs = process_cashflows(olb_arr, prop_arr, dec_arr, delayed_cfs)
+                except:
+                    # Fallback without numba
+                    # Calculate NNEG and cashflows
+                    min_len = min(len(olb_arr), len(prop_arr), len(dec_arr))
+                    nneg_olb = np.minimum(olb_arr[:min_len], prop_arr[:min_len])
+                    cfs = nneg_olb * dec_arr[:min_len]
+                    
+                    # Handle NaNs
+                    cfs = np.nan_to_num(cfs)
+                    
+                    # Handle settlement delay
+                    if delayed_cfs > 0 and delayed_cfs < len(cfs):
+                        early_sum = np.sum(cfs[:delayed_cfs+1])
+                        cfs[:delayed_cfs] = 0
+                        cfs[delayed_cfs] = early_sum
+                
+                # Store in result matrix
+                result_matrix[i, :len(cfs)] = cfs
+            
+            # Calculate total income - faster than sum of Series
+            total_income = np.sum(result_matrix, axis=0)
+            
+            # Convert back to pandas Series if needed
+            total_income_series = pd.Series(total_income)
+            
+            # Store in output dictionary
+            output_dictionary[runlist[j]] = total_income_series   
+                
+                
+             arrays or lists
+        ith_olb_proj_nneg = np.minimum(ith_olb_proj, ith_prop_proj)
+    
+    # Get decrement projection based on gender and age
+    if gender1 == 'F':
+        ith_decrement_proj = female_decrement_table[age1]
+    else:  # gender1 == 'M'
+        ith_decrement_proj = male_decrement_table[age1]
+    
+    # Calculate cashflows - handle pandas Series or numpy arrays
+    if isinstance(ith_olb_proj_nneg, pd.Series) and isinstance(ith_decrement_proj, pd.Series):
+        # Both are pandas Series
+        mp_cfs = ith_olb_proj_nneg * ith_decrement_proj
+        mp_cfs = mp_cfs.fillna(0)
+    else:
+        # Convert to numpy for calculation
+        ith_olb_proj_nneg_arr = np.array(ith_olb_proj_nneg)
+        ith_decrement_proj_arr = np.array(ith_decrement_proj)
+        # Ensure same length
+        min_len = min(len(ith_olb_proj_nneg_arr), len(ith_decrement_proj_arr))
+        mp_cfs = ith_olb_proj_nneg_arr[:min_len] * ith_decrement_proj_arr[:min_len]
+        mp_cfs = np.nan_to_num(mp_cfs)
+        mp_cfs = pd.Series(mp_cfs)
+    
+    # Allow for settlement delay
+    delayed_cfs = int(set_delay * (freq/12))
+    if delayed_cfs > 0:
+        # Calculate sum of early cashflows
+        early_sum = mp_cfs.iloc[:delayed_cfs+1].sum()
+        
+        # Set early cashflows to zero
+        mp_cfs.iloc[:delayed_cfs] = 0
+        
+        # Set delayed position to the sum
+        if delayed_cfs < len(mp_cfs):
+            mp_cfs.iloc[delayed_cfs] = early_sum
+    
+    # Append to income list
+    income.append(mp_cfs)
+
+# Calculate total income
+try:
+    # Try pandas concat if all are series with compatible indexes
+    total_income = pd.concat(income).groupby(level=0).sum()
+except:
+    # Fall back to simple sum if concat doesn't work
+    total_income = sum(income)
+
+# Store in output dictionary
+output_dictionary[runlist[j]] = total_income
+
+
+
+
+############# Further Optimised #################
+    from numba import jit  # Add if available in your environment
+    
+    # Precompute constants
+    delayed_cfs = int(set_delay * (freq/12))
+    
+    # Convert decrement tables to numpy arrays for faster access
+    def prepare_decrement_table(table):
+        """Convert a pandas decrement table to a dictionary of numpy arrays for fast access"""
+        return {age: np.asarray(table[age]) for age in table.keys()}
+    
+    # Use this if you have numba available
+    @jit(nopython=True)
+    def process_cashflows(olb, prop, decrements, delayed_pos):
+        """Process cashflows with numba acceleration"""
+        # Ensure inputs are right size
+        min_len = min(len(olb), len(prop), len(decrements))
+        olb = olb[:min_len]
+        prop = prop[:min_len]
+        decrements = decrements[:min_len]
+        
+        # Calculate NNEG and cashflows
+        nneg_olb = np.minimum(olb, prop)
+        cfs = nneg_olb * decrements
+        
+        # Handle settlement delay
+        if delayed_pos > 0 and delayed_pos < len(cfs):
+            early_sum = np.sum(cfs[:delayed_pos+1])
+            cfs[:delayed_pos] = 0
+            cfs[delayed_pos] = early_sum
+            
+        return cfs
+    
+    # Convert tables once upfront
+    female_dec_np = prepare_decrement_table(female_decrement_table)
+    male_dec_np = prepare_decrement_table(male_decrement_table)
+    
+    # Preallocate result arrays for maximum efficiency
+    max_proj_length = max(len(olb_proj[i]) for i in range(len(olb_proj)))
+    result_matrix = np.zeros((len(mpf), max_proj_length))
+    
+    # Main loop with maximum optimization
+    for i in range(len(mpfnge(len(mpf)):
+    # Get p)):
+        gender1 = mpf['Gender 1'][i]
+        age1 = mpf['Age 1'][i]
+        
+        # Get numpy arrays for calculations
+        olb_arr = np.asarray(olb_proj[i])
+        prop_arr = np.asarray(property_projection[i])
+        
+        # Get appropriate decrement table
+        dec_arr = female_dec_np[age1] if gender1 == 'F' else male_dec_np[age1]
+        
+        try:
+            # Try using numba if available
+            cfs = process_cashflows(olb_arr, prop_arr, dec_arr, delayed_cfs)
+        except:
+            # Fallback without numba
+            # Calculate NNEG and cashflows
+            min_len = min(len(olb_arr), len(prop_arr), len(dec_arr))
+            nneg_olb = np.minimum(olb_arr[:min_len], prop_arr[:min_len])
+            cfs = nneg_olb * dec_arr[:min_len]
+            
+            # Handle NaNs
+            cfs = np.nan_to_num(cfs)
+            
+            # Handle settlement delay
+            if delayed_cfs > 0 and delayed_cfs < len(cfs):
+                early_sum = np.sum(cfs[:delayed_cfs+1])
+                cfs[:delayed_cfs] = 0
+                cfs[delayed_cfs] = early_sum
+        
+        # Store in result matrix
+        result_matrix[i, :len(cfs)] = cfs
+    
+    # Calculate total income - faster than sum of Series
+    total_income = np.sum(result_matrix, axis=0)
+    
+    # Convert back to pandas Series if needed
+    total_income_series = pd.Series(total_income)
+    
+    # Store in output dictionary
+    output_dictionary[runlist[j]] = total_income_series   
+        
+        
+    
