@@ -17,8 +17,8 @@ start_time = time.time()
 
 
 #Set Working Directory
-os.chdir('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data')
-#os.chdir('/home/razorreddington/Documents/GitHub/ERM_Projection/Data')
+#os.chdir('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data')
+os.chdir('/home/razorreddington/Documents/GitHub/ERM_Projection/Data')
 ############## Data ################
 
 #Import Parameters
@@ -27,11 +27,8 @@ master_input = pd.read_excel('Master_Input.ods')
 master_input = master_input[master_input['Run'] == 'Y']
 
 #Import MPF Data
-#mpf = pd.read_excel('MPF_BIG.xlsx')
-#mpf = pd.read_excel('MPF.xlsx')
 #mpf = pd.read_csv('MPF.csv')
 mpf = pd.read_csv('MPF_BIG.csv')
-#(0.17*2000)/60
 
 
 #Clean MPF
@@ -72,7 +69,6 @@ proj_term = proj_years * freq + 1
 
 #################### Projection - Scenario Agnostic ####################
 
-#Project OLB
 olb_array = np.array(mpf['Loan Amount']) #current outstanding loan balance
 eff_rate_array = (1+np.array(mpf['AER']))**(1/freq)-1 #effective rate for each model point, allows for the projection frequency
 n = proj_years*freq #projection period
@@ -80,7 +76,6 @@ periods = np.arange(1, n+1).reshape(-1, 1)  #Term factor vector
 growth_factors = (1 + eff_rate_array) ** periods 
 
 olb_proj = pd.DataFrame(olb_array * growth_factors) #Projected outstanding loan balance
-
 base_property_values = list(mpf['Loan Amount']/mpf['LTV']) #Calculate t=0 property values 
 
 #################### Projection - Scenario Dependent ####################
@@ -104,8 +99,7 @@ for j in range(len(runlist)):
     hpi.index = range(0,len(hpi)) #re-index
     
     #Project property values using HPI
-    n = len(base_property_values)
-    property_projection = [base_property_values[i] * hpi for i in range(n)]
+    property_projection = [base_property_values[i] * hpi for i in range(len(base_property_values))]
     
     
     #-------------Decrement Projection-----------------   
@@ -113,7 +107,7 @@ for j in range(len(runlist)):
     oldest = max(mortality['Age'])
     
     ''''Dictionaries should ultimately be nested'''
-    female_decrement_table = {} #empty dic
+    female_decrement_table = {} #initialise dictionary
     male_decrement_table = {}
     for i in range(len(mortality)):
         mort_survival_female = (1-mortality['F'][i:]).values.cumprod() #calculate mortality survival probabilities 
@@ -133,33 +127,32 @@ for j in range(len(runlist)):
         
 
  
-    # Create an empty list to collect individual cashflows
-    income = []
     
+    income = [] #Create an empty list to collect individual cashflows
     for i in range(len(mpf)):
+        
         #Produce economic projections for the ith model point
         ith_prop_proj = np.array(property_projection[i])
         ith_olb_proj = np.array(olb_proj[i])
         
-        # Get demographics for current model point
+        #Get demographics for current model point
         gender1 = mpf['Gender 1'][i]
         age1 = mpf['Age 1'][i]
         
         #Allow for NNEG
         ith_olb_proj_nneg = np.minimum(ith_olb_proj, ith_prop_proj)
         
-        # Get decrement projection based on gender and age
+        #Get decrement projection based on gender and age -THIS CAN  BE OPTIMISED FURTHER
         if gender1 == 'F':
             ith_decrement_proj = female_decrement_table[age1]
         else:  # gender1 == 'M'
             ith_decrement_proj = male_decrement_table[age1]
         
-  
-            # Ensure same length
-            min_len = min(len(ith_olb_proj_nneg), len(ith_decrement_proj))
-            mp_cfs = ith_olb_proj_nneg[:min_len] * ith_decrement_proj[:min_len]
-            mp_cfs = np.nan_to_num(mp_cfs)
-            mp_cfs = pd.Series(mp_cfs)
+        #Ensure same length
+        min_len = min(len(ith_olb_proj_nneg), len(ith_decrement_proj))
+        mp_cfs = ith_olb_proj_nneg[:min_len] * ith_decrement_proj[:min_len]
+        mp_cfs = np.nan_to_num(mp_cfs)
+        mp_cfs = pd.Series(mp_cfs)
         
         # Allow for settlement delay
         delayed_cfs = int(set_delay * (freq/12))
