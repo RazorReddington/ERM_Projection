@@ -85,14 +85,14 @@ base_property_values = list(mpf['Loan Amount']/mpf['LTV'])
 #Set the scenario list
 runlist = list(master_input['Name'])
 
-
+output_dictionary = {}
 #Loop Through All scenarios
-for i in range(len(runlist)):
-    i=1
-    mortality = mortality_tables[master_input['Mortality Table'][i][:-4]]
-    ver = ver_tables[master_input['VER Table'][i][:-4]]
-    hpi = hpi_tables[master_input['HPI'][i][:-4]]
-    set_delay = master_input['Settlement Delay (Alive)'][i]
+for j in range(len(runlist)):
+    
+    mortality = mortality_tables[master_input['Mortality Table'][j][:-4]]
+    ver = ver_tables[master_input['VER Table'][j][:-4]]
+    hpi = hpi_tables[master_input['HPI'][j][:-4]]
+    set_delay = master_input['Settlement Delay (Alive)'][j]
 
     
     #---------------HPI Projection------------------
@@ -164,24 +164,22 @@ for i in range(len(runlist)):
         mp_cfs[delayed_cfs] = np.sum(mp_cfs[0:delayed_cfs+1])
         mp_cfs[0:delayed_cfs]=0
 
-
+        #Append Income Cashflows for each model point
         income.append(mp_cfs)
         
-        
-       
-        
-    
+
     #Output
+    output_dictionary = dict(scenario = runlist[i],income_cfs = income)
     
     
         
     
 
     
-        '''
+'''
         if mpf['Joint Life'][i] == "Joint Life":
             gender2 = mpf['Gender 2'][i]
             age2 = mpf['Age 2'][i]
-        '''      
+'''      
 
 
