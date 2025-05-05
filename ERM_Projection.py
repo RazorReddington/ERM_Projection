@@ -86,7 +86,7 @@ olb_proj = pd.DataFrame(olb_proj)
 #Calculate t=0 property values 
 base_property_values = list(mpf['Loan Amount']/mpf['LTV'])
 
-
+0.01*1600/60
 #################### Projection - Scenario Dependent ####################
 
 #Set the scenario list
@@ -106,6 +106,10 @@ for j in range(len(runlist)):
     hpi = (1 + np.repeat(hpi['HPI'],freq))**(1/freq)
     hpi = np.cumprod(hpi)
     hpi.index = range(0,len(hpi)) #re-index
+    
+    #Project property values using HPI
+    n = len(base_property_values)
+    property_projection = [base_property_values[i] * hpi for i in range(n)]
     
     
     #-------------Decrement Projection-----------------   
@@ -133,9 +137,9 @@ for j in range(len(runlist)):
         
 
     #Project property values using HPI
-    n = len(base_property_values)
-    property_projection = [base_property_values[i] * hpi for i in range(n)]
-    
+    #n = len(base_property_values)
+    #property_projection = [base_property_values[i] * hpi for i in range(n)]
+
     
     #Loop Through All Model Points
     income = []
