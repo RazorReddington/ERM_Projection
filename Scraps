@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Mon May  5 11:43:49 2025
+
+@author: razorreddington
+"""
+
+#convert to mortality survival rates
+mort_survival_female = (1-mortality['F']).cumprod() 
+mort_survival_male = (1-mortality['M']).cumprod() 
+
+
+#convert to ver survival rates
+ver_survival_female = (1 - ver['F']).cumprod()
+ver_survival_male = (1 - ver['M']).cumprod()
+
+
+#Calculate all exit survival rates
+survival_female = mort_survival_female * ver_survival_female
+survival_male = mort_survival_male * ver_survival_male
+
+
+#Construct decrements table
+n = len(survival_female)
+female_decrements= [survival_female[i-1] - survival_female[i] if i >0 else 1 - survival_female[i] for  i in range(n) ]
+male_decrements = [survival_male[i-1] - survival_male[i] if i >0 else 1 - survival_male[i] for  i in range(n) ]
+decrements = pd.DataFrame({'Age':mortality['Age'], 'M': male_decrements, 'F': female_decrements})
+
+
+#Reproduce decrement table based on the valuation frequency
+decrements = pd.concat([decrements]*freq)
+decrements['M'] = decrements['M']/freq
+decrements['F'] = decrements['F']/freq
+decrements = decrements.sort_index(ascending=True)
+
+
+#Check
+np.round(np.sum(decrements['M']),8) == 1
+np.round(np.sum(decrements['F']),8) == 1
