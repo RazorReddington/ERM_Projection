@@ -27,8 +27,8 @@ master_input = pd.read_excel('Master_Input.ods')
 master_input = master_input[master_input['Run'] == 'Y']
 
 #Import MPF Data
-#mpf = pd.read_csv('MPF.csv')
-mpf = pd.read_csv('MPF_BIG.csv')
+mpf = pd.read_csv('MPF_Phoenix_Internal.csv')
+#mpf = pd.read_csv('MPF_BIG.csv')
 
 
 #Clean MPF
@@ -97,6 +97,7 @@ for j in range(len(runlist)):
     mortality = mortality_tables[master_input['Mortality Table'][j][:-4]]
     ver = ver_tables[master_input['VER Table'][j][:-4]]
     hpi = hpi_tables[master_input['HPI'][j][:-4]]
+    ltc = ltc_tables[master_input['LTC'][0][:-4]]
     set_delay = master_input['Settlement Delay (Alive)'][j]
     prop_haircut = master_input['Property Haircut'][j]
     sales_cost = master_input['Sales Cost'][j]
@@ -120,15 +121,17 @@ for j in range(len(runlist)):
     for i in range(len(mortality)):
         mort_survival_female = (1-mortality['F'][i:]).values.cumprod() #calculate mortality survival probabilities 
         ver_survival_female = (1 - ver['F'][i:]).values.cumprod() #calculate ver survival  - THINK THIS IS WRONG
-        survival_female = mort_survival_female * ver_survival_female #calculate total survival probabilities
+        ltc_survival_female = (1-ltc['F'][i:]).values.cumprod() #calculate ltc survival
+        survival_female = mort_survival_female * ver_survival_female * ltc_survival_female #calculate total survival probabilities
         female_decrements = np.concatenate(([1-survival_female[0]],survival_female[:-1] - survival_female[1:]))   
         female_decrements = np.repeat(female_decrements/freq, freq)
         female_decrement_table[i + youngest] = female_decrements #Add to the dictionary
     
         
         mort_survival_male = (1-mortality['M'][i:]).values.cumprod()
-        ver_survival_male = (1 - ver['M'][i:]).values.cumprod() 
-        survival_male = mort_survival_male * ver_survival_male
+        ver_survival_male = (1 - ver['M'][i:]).values.cumprod()
+        ltc_survival_male = (1-ltc['M'][i:]).values.cumprod()
+        survival_male = mort_survival_male * ver_survival_male * ltc_survival_male
         male_decrements = np.concatenate(([1-survival_male[0]],survival_male[:-1] - survival_male[1:]))   
         male_decrements = np.repeat(male_decrements/freq, freq)
         male_decrement_table[i + youngest] = male_decrements #Add to the dictionary
