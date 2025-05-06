@@ -17,8 +17,8 @@ start_time = time.time()
 
 
 #Set Working Directory
-#os.chdir('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data')
-os.chdir('/home/razorreddington/Documents/GitHub/ERM_Projection/Data')
+os.chdir('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data')
+#os.chdir('/home/razorreddington/Documents/GitHub/ERM_Projection/Data')
 ############## Data ################
 
 #Import Parameters
@@ -56,6 +56,13 @@ for filename in master_input["HPI"]:
     df = pd.read_csv(filename)
     name = os.path.splitext(filename)[0]
     hpi_tables[name] = df
+    
+ltc_tables ={}
+for filename in master_input["LTC"]:       
+    df = pd.read_csv(filename)
+    name = os.path.splitext(filename)[0]
+    ltc_tables[name] = df    
+
 
 ############## Parameters ##############
 
@@ -91,6 +98,8 @@ for j in range(len(runlist)):
     ver = ver_tables[master_input['VER Table'][j][:-4]]
     hpi = hpi_tables[master_input['HPI'][j][:-4]]
     set_delay = master_input['Settlement Delay (Alive)'][j]
+    prop_haircut = master_input['Property Haircut'][j]
+    sales_cost = master_input['Sales Cost'][j]
 
     
     #---------------HPI Projection------------------
@@ -98,9 +107,8 @@ for j in range(len(runlist)):
     hpi = np.cumprod(hpi)
     hpi.index = range(0,len(hpi)) #re-index
     
-    #Project property values using HPI
-    property_projection = [base_property_values[i] * hpi for i in range(len(base_property_values))]
-    
+    base_property_values = np.array(base_property_values) * (1 - prop_haircut) * (1 - sales_cost) #Allow for property haircut and cost of sale
+    property_projection = [base_property_values[i] * hpi for i in range(len(base_property_values))] #Project property values using HPI
     
     #-------------Decrement Projection-----------------   
     youngest = min(mortality['Age'])
@@ -202,5 +210,4 @@ print(f"Script executed in {execution_time:.2f} seconds")
             gender2 = mpf['Gender 2'][i]
             age2 = mpf['Age 2'][i]
 '''      
-
 
