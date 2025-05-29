@@ -27,7 +27,7 @@ master_input = pd.read_excel('Master_Input.ods')
 master_input = master_input[master_input['Run'] == 'Y']
 
 #Import MPF Data
-mpf = pd.read_csv('MPF_Phoenix_Internal.csv')
+mpf = pd.read_csv('MPF_Phoenix_Internal_1.csv')
 #mpf = pd.read_csv('MPF_BIG.csv')
 
 
@@ -69,7 +69,7 @@ for filename in master_input["LTC"]:
 valdate = "31/12/2024"
 output_filepath = 'output.xlsx'
 proj_years = 50
-freq = 4
+freq = 12
 proj_term = proj_years * freq + 1
 
 
@@ -103,6 +103,7 @@ for j in range(len(runlist)):
     sales_cost = master_input['Sales Cost'][j]
 
     
+
     #---------------HPI Projection------------------
     hpi = (1 + np.repeat(hpi['HPI'],freq))**(1/freq)
     hpi = np.cumprod(hpi)
@@ -114,30 +115,37 @@ for j in range(len(runlist)):
     #-------------Decrement Projection-----------------   
     youngest = min(mortality['Age'])
     oldest = max(mortality['Age'])
+        
+    #Uplift Mortality rates by LTC rates
+    mortality['M'] = np.minimum(mortality['M'] * (1 + ltc['M']),1)
+    mortality['F'] = np.minimum(mortality['F'] * (1 + ltc['F']),1)
     
+
     ''''Dictionaries should ultimately be nested'''
-    female_decrement_table = {} #initialise dictionary
+    female_decrement_table = {} #initialise dictionaries
+    female_ver_table = {}
     male_decrement_table = {}
+    male_ver_table = {}
     for i in range(len(mortality)):
-        mort_survival_female = (1-mortality['F'][i:]).values.cumprod() #calculate mortality survival probabilities 
-        ver_survival_female = (1 - ver['F'][i:]).values.cumprod() #calculate ver survival  - THINK THIS IS WRONG
-        ltc_survival_female = (1-ltc['F'][i:]).values.cumprod() #calculate ltc survival
-        survival_female = mort_survival_female * ver_survival_female * ltc_survival_female #calculate total survival probabilities
-        female_decrements = np.concatenate(([1-survival_female[0]],survival_female[:-1] - survival_female[1:]))   
+        #i=1
+        mort_survival_female = (1-mortality['F'][i:]).values.cumprod() #calculate mortality survival probabilities(this includes LTC)
+        female_decrements = np.concatenate(([1-mort_survival_female[0]],mort_survival_female[:-1] - mort_survival_female[1:]))   
         female_decrements = np.repeat(female_decrements/freq, freq)
         female_decrement_table[i + youngest] = female_decrements #Add to the dictionary
     
-        
         mort_survival_male = (1-mortality['M'][i:]).values.cumprod()
-        ver_survival_male = (1 - ver['M'][i:]).values.cumprod()
-        ltc_survival_male = (1-ltc['M'][i:]).values.cumprod()
-        survival_male = mort_survival_male * ver_survival_male * ltc_survival_male
-        male_decrements = np.concatenate(([1-survival_male[0]],survival_male[:-1] - survival_male[1:]))   
+        male_decrements = np.concatenate(([1-mort_survival_male[0]],mort_survival_male[:-1] - mort_survival_male[1:]))   
         male_decrements = np.repeat(male_decrements/freq, freq)
         male_decrement_table[i + youngest] = male_decrements #Add to the dictionary
         
-
- 
+        #VER
+        female_ver = ver['F'][i:]*mort_survival_female
+        female_ver = np.repeat(female_ver/freq,freq)
+        female_ver_table[i + youngest] = female_ver
+        
+        male_ver = ver['M'][i:]*mort_survival_male
+        male_ver = np.repeat(male_ver/freq,freq)
+        male_ver_table[i + youngest] = male_ver
     
     income = [] #Create an empty list to collect individual cashflows
     for i in range(len(mpf)):
@@ -156,15 +164,28 @@ for j in range(len(runlist)):
         #Get decrement projection based on gender and age -THIS CAN  BE OPTIMISED FURTHER
         if gender1 == 'F':
             ith_decrement_proj = female_decrement_table[age1]
+            ith_ver_proj = female_ver_table[age1]
         else:  # gender1 == 'M'
             ith_decrement_proj = male_decrement_table[age1]
+            ith_ver_proj = male_ver_table[age1]
         
-        #Ensure same length
-        min_len = min(len(ith_olb_proj_nneg), len(ith_decrement_proj))
-        mp_cfs = ith_olb_proj_nneg[:min_len] * ith_decrement_proj[:min_len]
-        mp_cfs = np.nan_to_num(mp_cfs)
-        mp_cfs = pd.Series(mp_cfs)
         
+        min_len = min(len(ith_olb_proj_nneg), len(ith_decrement_proj)) #Ensure same length
+        
+        #Mortality Cashflows
+        mortality_cfs = ith_olb_proj_nneg[:min_len] * ith_decrement_proj[:min_len]
+        mortality_cfs = np.nan_to_num(mortality_cfs)
+        mortality_cfs = pd.Series(mortality_cfs)
+        
+        
+        #Prepayment Cashflows
+        ver_cfs = ith_olb_proj_nneg[:min_len] * ith_ver_proj[:min_len]
+        ver_cfs.index = range(0,len(ver_cfs))
+    
+        
+        mp_cfs = mortality_cfs + ver_cfs*0
+        
+        '''
         # Allow for settlement delay
         delayed_cfs = int(set_delay * (freq/12))
         if delayed_cfs > 0:
@@ -177,7 +198,7 @@ for j in range(len(runlist)):
             # Set delayed position to the sum
             if delayed_cfs < len(mp_cfs):
                 mp_cfs.iloc[delayed_cfs] = early_sum
-        
+        '''
         # Append to income list
         income.append(mp_cfs)
     
@@ -201,6 +222,11 @@ for j in range(len(runlist)):
 #Output results to an excel document
 my_output = pd.DataFrame(data = output_dictionary)
 my_output.to_excel(output_filepath)
+
+import xlwings as xw
+
+xw.Book(output_filepath)
+#open(output_filepath)
 
 end_time = time.time()
 execution_time = end_time - start_time
