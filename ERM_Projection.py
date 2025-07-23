@@ -275,10 +275,10 @@ if valuation_method == "Moodys":
   
             if policy_type == 'Single':
                 
-                ver_survival_adjustment = (1 / ver_survival[gender1][age1][:len(rational_ver)])*rational_ver
+                ver_survival_adjustment = (1 / ver_survival[gender1][age1][:len(rational_ver)])*rational_ver[:]
                 ver_survival_adjustment = np.array([1 if x ==0 else x for x in ver_survival_adjustment])
             
-                ith_decrement_proj = decrement_rates[gender1][age1] #* ver_survival_adjustment
+                ith_decrement_proj = decrement_rates[gender1][age1][1:] * np.pad(ver_survival_adjustment,(0,max_rates - len(ver_survival_adjustment)-1),mode = 'constant', constant_values = 0)
                 ith_mort_survival = survival_rates[gender1][age1]
                 ith_ver_proj = ver_survival[gender1][age1]
                 ith_ver_rate = ver_rates[gender1][(age1 - youngest) * freq:]
