@@ -90,8 +90,8 @@ output_freq = 4
 olb_array = np.array(mpf['Loan Amount']) #current outstanding loan balance
 eff_rate_array = (1+np.array(mpf['AER']))**(1/freq)-1 #effective rate for each model point, allows for the projection frequency
 service_fee = np.array(mpf['Servicing Fee'])
-n = proj_years*freq #projection period
-periods = np.arange(1, n+1).reshape(-1, 1)  #Term factor vector
+#n = proj_years*freq #projection period
+periods = np.arange(0, proj_term).reshape(-1, 1)  #Term factor vector
 growth_factors = (1 + eff_rate_array) ** periods 
 
 olb_proj = pd.DataFrame(olb_array * growth_factors) #Projected outstanding loan balance
@@ -122,6 +122,7 @@ if valuation_method == "Moodys":
         #---------------HPI Projection------------------
         hpi = (1 + np.repeat(hpi['HPI'],freq))**(1/freq)
         hpi = np.cumprod(hpi)
+        hpi = pd.Series(np.insert(hpi,0,1))
         hpi.index = range(0,len(hpi)) #re-index
         
         base_property_values = np.array(base_property_values) * (1 - prop_haircut) * (1 - sales_cost) #Allow for property haircut and cost of sale
@@ -142,10 +143,8 @@ if valuation_method == "Moodys":
         
         #Produce qx projections
         female_qx = np.repeat(mortality['F'],freq)
-        #female_qx = pd.Series(np.insert(female_qx,0,0))
         female_qx.index = range(0,len(female_qx))
         male_qx = np.repeat(mortality['M'],freq)
-        #male_qx = pd.Series(np.insert(male_qx,0,0))
         male_qx.index = range(0,len(male_qx))
         
         #Smooth Mortality rates
@@ -171,56 +170,65 @@ if valuation_method == "Moodys":
         male_ver = np.repeat(male_ver,freq)
         male_ver.index = range(len(male_ver))
  
-        ver_rates = {}
-        ver_rates['Male'] = male_ver
-        ver_rates['Female'] = female_ver
+        #ver_rates = {}
+        #ver_rates['Male'] = male_ver
+        #ver_rates['Female'] = female_ver
  
-        ''''Dictionaries should ultimately be nested'''
+
         female_decrement_table = {} #initialise dictionaries
         female_ver_table = {}
         female_survival_table = {}
+        female_ver_rates = {}
         male_decrement_table = {}
         male_ver_table = {}
         male_survival_table = {}
+        male_ver_rates = {}
         for i in range(len(mortality)):
-            #i = 0
+            #i=0
+            n = proj_term - 1
             k = i * freq
+            l = k + n 
             
             #VER
-            ver_survival_female = (1-female_ver[k:]).values.cumprod() #determine survival rates from exit rates
-            ver_survival_female = np.pad(ver_survival_female,(0,max_rates - len(ver_survival_female)) , mode = 'constant', constant_values = 0) #standardise array length
+            ver_survival_female = (1-female_ver[k:l]).values.cumprod() #determine survival rates from exit rates
+            ver_survival_female = np.pad(ver_survival_female,(1,n - len(ver_survival_female)) , mode = 'constant', constant_values = (1,0)) #standardise array length
             female_ver_table[i + youngest] = ver_survival_female #collate arrays into a dictionary
-                                 
-            ver_survival_male = (1-male_ver[k:]).values.cumprod()
-            ver_survival_male = np.pad(ver_survival_male,(0,max_rates - len(ver_survival_male)) , mode = 'constant', constant_values = 0)
+            female_ver_rates[i + youngest] = np.pad(female_ver[k:l],(1,n - len(female_ver[k:l])), mode = 'constant', constant_values = 0)   
+            
+                     
+            ver_survival_male = (1-male_ver[k:l]).values.cumprod()
+            ver_survival_male = np.pad(ver_survival_male,(1,n - len(ver_survival_male)) , mode = 'constant', constant_values = (1,0))
             male_ver_table[i + youngest] = ver_survival_male
+            male_ver_rates[i + youngest] = np.pad(male_ver[k:l],(1,n - len(male_ver[k:l])), mode = 'constant', constant_values = 0) 
         
             #Mortality
-            mort_survival_female = (1-female_qx[k:]).values.cumprod()
-            mort_survival_female = np.pad(mort_survival_female,(0,max_rates - len(mort_survival_female)) , mode = 'constant', constant_values = 0)
+            mort_survival_female = (1-female_qx[k:l]).values.cumprod()
+            mort_survival_female = np.pad(mort_survival_female,(1,n - len(mort_survival_female)) , mode = 'constant', constant_values = (1,0))
             female_survival_table [i + youngest] = mort_survival_female
-            female_decrements = np.concatenate(([1-mort_survival_female[0]],(mort_survival_female[:-1] - mort_survival_female[1:])*ver_survival_female[:-1]))
-            female_decrements = np.pad(female_decrements,(0,max_rates - len(female_decrements)) , mode = 'constant', constant_values = 1)
-            female_decrement_table[i + youngest] = female_decrements #Add to the dictionary
+            #female_decrements = np.concatenate(([1-mort_survival_female[0]],(mort_survival_female[:-1] - mort_survival_female[1:])*ver_survival_female[:-1]))
+            #female_decrements = np.pad(female_decrements,(0,n - len(female_decrements)) , mode = 'constant', constant_values = 1)
+            #female_decrement_table[i + youngest] = female_decrements #Add to the dictionary
         
-            mort_survival_male = (1-male_qx[k:]).values.cumprod()
-            mort_survival_male = np.pad(mort_survival_male,(0,max_rates - len(mort_survival_male)) , mode = 'constant', constant_values = 0)
+            mort_survival_male = (1-male_qx[k:l]).values.cumprod()
+            mort_survival_male = np.pad(mort_survival_male,(1,n - len(mort_survival_male)) , mode = 'constant', constant_values = (1,0))
             male_survival_table [i + youngest] = mort_survival_male
-            male_decrements = np.concatenate(([1-mort_survival_male[0]],(mort_survival_male[:-1] - mort_survival_male[1:])*ver_survival_male[:-1]))   
-            male_decrements = np.pad(male_decrements,(0,max_rates - len(male_decrements)) , mode = 'constant', constant_values = 1)
-            male_decrement_table[i + youngest] = male_decrements #Add to the dictionary
+           #male_decrements = np.concatenate(([1-mort_survival_male[0]],(mort_survival_male[:-1] - mort_survival_male[1:])*ver_survival_male[:-1]))   
+            #male_decrements = np.pad(male_decrements,(0,n - len(male_decrements)) , mode = 'constant', constant_values = 1)
+            #male_decrement_table[i + youngest] = male_decrements #Add to the dictionary
         
         #Compile rate dictionaries into parent dictionaries - avoids if statments later in the code 
         survival_rates = {}
         decrement_rates = {}
         ver_survival = {}
+        ver_rates = {}
         survival_rates['Male'] = male_survival_table
         survival_rates['Female'] = female_survival_table
         decrement_rates['Male'] = male_decrement_table
         decrement_rates['Female'] = female_decrement_table  
         ver_survival['Male'] = male_ver_table
         ver_survival['Female'] = female_ver_table
-        
+        ver_rates['Male'] = male_ver_rates
+        ver_rates['Female'] = female_ver_rates
         
 #################### Projection - Model Point Dependent #################### 
 
@@ -232,7 +240,7 @@ if valuation_method == "Moodys":
 
         for i in range(len(mpf)):            
             #Produce economic projections for the ith model point
-            i=8114
+            #i=13
             ith_service_fee = service_fee[i]
             ith_prop_proj = np.array(property_projection[i])
             ith_olb_proj = np.array(olb_proj[i])
@@ -267,38 +275,45 @@ if valuation_method == "Moodys":
             
             #Decrement rate adjustment for nneg
                       
-            rational_ver = ith_olb_proj_nneg < ith_olb_proj
+            rational_ver = ith_olb_proj < ith_prop_proj
             
             
             
             
   
             if policy_type == 'Single':
-                
-                ver_survival_adjustment = (1 / ver_survival[gender1][age1][:len(rational_ver)])*rational_ver[:]
-                ver_survival_adjustment = np.array([1 if x ==0 else x for x in ver_survival_adjustment])
-            
-                ith_decrement_proj = decrement_rates[gender1][age1][1:] * np.pad(ver_survival_adjustment,(0,max_rates - len(ver_survival_adjustment)-1),mode = 'constant', constant_values = 0)
                 ith_mort_survival = survival_rates[gender1][age1]
-                ith_ver_proj = ver_survival[gender1][age1]
-                ith_ver_rate = ver_rates[gender1][(age1 - youngest) * freq:]
                 
-
+                ith_ver_proj = ver_survival[gender1][age1] 
+                ith_ver_proj[~rational_ver] = 1 #Need to be careful of this - if a scenario exists such that NNEG can move from inside to outside the money - this projeciton will be wrong
+                
+                ith_ver_rate = ver_rates[gender1][age1]
+                ith_ver_rate[~rational_ver] = 0 
+                
+                ith_decrement_proj = (ith_mort_survival[:-1] - ith_mort_survival[1:]) * ith_ver_proj[:-1]
+                ith_decrement_proj = np.insert(ith_decrement_proj,0,0)
+                
+                
             elif policy_type == 'Joint Life':
-                ith_decrement_proj = decrement_rates[gender1][age1] * decrement_rates[gender2][age2]
+                
                 ith_mort_survival = survival_rates[gender1][age1] + survival_rates[gender2][age2] - (survival_rates[gender1][age1] * survival_rates[gender2][age2])
+                
                 ith_ver_proj = ver_survival[gender1][min(age1,age2)]
-                ith_ver_rate = ver_rates[gender1][(min(age1,age2) - youngest) * freq:]
-
+                ith_ver_proj[~rational_ver] = 1
+                
+                ith_ver_rate = ver_rates[gender1][age1]
+                ith_ver_rate[~rational_ver] = 0
            
+                ith_decrement_proj = (ith_mort_survival[:-1] - ith_mort_survival[1:]) * ith_ver_proj[:-1]
+                ith_decrement_proj = np.insert(ith_decrement_proj,0,0)
+           
+                #ith_decrement_proj = decrement_rates[gender1][age1] * decrement_rates[gender2][age2]
             
-            ith_ver_rate.index = range(len(ith_ver_rate))
-            ith_ver_rate = np.pad(ith_ver_rate,(0,max_rates - len(ith_ver_rate)) , mode = 'constant', constant_values = 0)
             
-            min_len = min(len(ith_olb_proj_nneg), len(ith_decrement_proj)) #Ensure same length
+   
             
             #Calculate Mortality Cashflows
-            mortality_cfs = ith_olb_proj_nneg[:min_len] * ith_decrement_proj[:min_len]
+            mortality_cfs = ith_olb_proj_nneg * ith_decrement_proj
             mortality_cfs = np.nan_to_num(mortality_cfs)
             mortality_cfs = pd.Series(mortality_cfs)
             
@@ -306,24 +321,21 @@ if valuation_method == "Moodys":
             #Calculate Prepayment Cashflows
             initial_ver_rate = ([ith_mort_survival[0] * ith_ver_rate[0]])
             ver_rate = np.concatenate([initial_ver_rate,ith_ver_proj[:-1] * ith_mort_survival[1:] * ith_ver_rate[1:]])         
-            ver_cfs = pd.Series(ver_rate[:min_len] * ith_olb_proj_nneg[:min_len])
-            
-            #Allow for rational VER
-            
-            #ver_cfs = ver_cfs * rational_ver
-            '''
-            covered above?
-            '''
+            ver_cfs = pd.Series(ver_rate * ith_olb_proj_nneg)
+
 
             #Allow for settlement delay
             mortality_cfs = np.pad(mortality_cfs, int((freq/12)*set_delay), mode = 'constant', constant_values = 0)
             ver_cfs = np.pad(ver_cfs, int((freq/12)*set_delay), mode = 'constant', constant_values = 0)
             
             #Calculate servicing fee cashflows
-            service_fee_cfs = ith_olb_proj[:min_len] * ith_mort_survival[:min_len] * ith_service_fee/freq
+            service_fee_cfs = ith_olb_proj[1:] * ith_mort_survival[:-1] * ith_ver_proj[:-1] * ith_service_fee/freq
+            service_fee_cfs = np.insert(service_fee_cfs, 0, 0)
+
+            test = ith_mort_survival[1:] * ith_ver_proj[1:]
             
             #Calculate OLB after allowing for decrements
-            ith_outstanding_olb = ith_olb_proj[:min_len] * ith_mort_survival[:min_len]
+            ith_outstanding_olb = ith_olb_proj * ith_mort_survival
             
             # Append to income list
             decrement_income.append(mortality_cfs)
