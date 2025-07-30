@@ -8,12 +8,9 @@ Created on Fri Apr 11 21:47:54 2025
 import numpy as np
 import pandas as pd
 import os
-import itertools
 import scipy
-#import csv
-
-
 import time
+
 # Record start time
 start_time = time.time()
 
@@ -21,24 +18,27 @@ start_time = time.time()
 #Set Working Directory
 os.chdir('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data')
 #os.chdir('/home/razorreddington/Documents/GitHub/ERM_Projection/Data')
+
 ############## Data ################
-
 #Import Parameters
-master_input = pd.read_excel('Master_Input.ods')
+scenario_parameters = pd.read_excel('Master_Input.xlsx',sheet_name= 'Scenario_Parameters')
+global_parameters = pd.read_excel('Master_Input.xlsx',sheet_name= 'Global_Parameters')
 
-#Other Parameters - to be added to final input source
-valuation_method = "Moodys" #Moodys or Fitch
-nneg_method = "BS" #Intrinsic or BS
+working_directory = global_parameters['Value'][0]
+mpf = pd.read_csv(global_parameters['Value'][1])
+valdate = global_parameters['Value'][2]
+proj_years = int(global_parameters['Value'][3])
+freq = int(global_parameters['Value'][4])
+proj_term = proj_years * freq + 1
+output_filepath = global_parameters['Value'][5]
+output_freq = int(global_parameters['Value'][6])
+
 
 #Remove non running scenarios
-master_input = master_input[master_input['Run'] == 'Y']
+scenario_parameters = scenario_parameters[scenario_parameters['Run'] == 'Y']
+scenario_parameters.index = range(len(scenario_parameters))
 #Set the scenario list
-runlist = list(master_input['Name'])
-
-
-#Import MPF Data
-mpf = pd.read_csv('MPF_Phoenix_Internal.csv')
-#mpf = pd.read_csv('MPF_BIG.csv')
+runlist = list(scenario_parameters['Name'])
 
 
 #Clean MPF
@@ -48,41 +48,54 @@ mpf = pd.read_csv('MPF_Phoenix_Internal.csv')
 
 #Import Mortality Assumptions
 mortality_tables ={}
-for filename in master_input["Mortality Table"]:       
+for filename in scenario_parameters["Mortality Table"]:       
     df = pd.read_csv(filename)
     name = os.path.splitext(filename)[0]
     mortality_tables[name] = df
 
 #Import VER Assumptions
 ver_tables ={}
-for filename in master_input["VER Table"]:       
+for filename in scenario_parameters["VER Table"]:       
     df = pd.read_csv(filename)
     name = os.path.splitext(filename)[0]
     ver_tables[name] = df
 
 #Import HPI Assumptions
 hpi_tables ={}
-for filename in master_input["HPI"]:       
+for filename in scenario_parameters["HPI"]:       
     df = pd.read_csv(filename)
     name = os.path.splitext(filename)[0]
     hpi_tables[name] = df
     
 ltc_tables ={}
-for filename in master_input["LTC"]:       
+for filename in scenario_parameters["LTC"]:       
     df = pd.read_csv(filename)
     name = os.path.splitext(filename)[0]
     ltc_tables[name] = df    
 
+mort_improv_tables = {}
+for filename in scenario_parameters["Mortality Improvement"]:       
+    df = pd.read_csv(filename)
+    name = os.path.splitext(filename)[0]
+    mort_improv_tables[name] = df 
 
-############## Parameters ##############
 
-valdate = "31/12/2024"
-output_filepath = 'output.xlsx'
-proj_years = 50
-freq = 12
-proj_term = proj_years * freq + 1
-output_freq = 4
 
+############## Functions ##############
+from numba import njit
+@njit(fastmath = True)
+def black_scholes_76(F, X, r, sigma, T):
+    d1 = (np.log(F / X) + T * (r + 0.5 * sigma ** 2)) / (np.sqrt(T) * sigma)    
+    return d1
+
+def lin_interp(array, frequency): #linear interpolation function
+    for i in range(len(array)-frequency):
+        j = i + frequency
+        lower_scale = 1 - np.mod(i,frequency)/frequency 
+        upper_scale = np.mod(i,frequency)/frequency 
+        array[i] = array[i]*lower_scale + array[j]*upper_scale
+        
+    return array
 
 
 #################### Projection - Scenario Agnostic ####################
@@ -101,27 +114,32 @@ base_property_values = list(mpf['Loan Amount']/mpf['LTV']) #Calculate t=0 proper
 
 #################### Projection - Scenario Dependent ####################
 
-if valuation_method == "Moodys":
 
-    cf_output_dictionary = {}
-    olb_output_dictionary = {}
-    property_output_dictionary = {}
-    #Loop Through All scenarios
-    for j in range(len(runlist)):
-        scenario = runlist[j]
-        mortality = mortality_tables[master_input['Mortality Table'][j][:-4]]
-        ver = ver_tables[master_input['VER Table'][j][:-4]]
-        hpi = hpi_tables[master_input['HPI'][j][:-4]]
-        ltc = ltc_tables[master_input['LTC'][0][:-4]]
-        set_delay = master_input['Settlement Delay (Alive)'][j]
-        prop_haircut = master_input['Property Haircut'][j]
-        sales_cost = master_input['Sales Cost'][j]
-        
-        
-    
+cf_output_dictionary = {}
+olb_output_dictionary = {}
+property_output_dictionary = {}
+#Loop Through All scenarios
+for j in range(len(runlist)):
+    scenario = runlist[j]
+    mortality = mortality_tables[scenario_parameters['Mortality Table'][j][:-4]]
+    mortality_improvement = mort_improv_tables[scenario_parameters['Mortality Improvement'][j][:-4]]
+    ver = ver_tables[scenario_parameters['VER Table'][j][:-4]]
+    hpi = hpi_tables[scenario_parameters['HPI'][j][:-4]]
+    ltc = ltc_tables[scenario_parameters['LTC'][j][:-4]]
+    set_delay = scenario_parameters['Settlement Delay (Alive)'][j]
+    prop_haircut = scenario_parameters['Property Haircut'][j]
+    sales_cost = scenario_parameters['Sales Cost'][j]
+    valuation_method = scenario_parameters['Valuation Method'][j] #Moodys or Fitch
+    nneg_method = scenario_parameters['NNEG Approach'][j]
+
+
+
+    if valuation_method == "Moodys":
+
+
         #---------------HPI Projection------------------
         hpi = (1 + np.repeat(hpi['HPI'],freq))**(1/freq)
-        hpi = np.cumprod(hpi)
+        hpi = np.cumprod(hpi[:proj_term-1])
         hpi = pd.Series(np.insert(hpi,0,1))
         hpi.index = range(0,len(hpi)) #re-index
         
@@ -133,9 +151,14 @@ if valuation_method == "Moodys":
         oldest = max(mortality['Age'])
         max_rates = (oldest - youngest + 1) * freq
         
+        #Mortality Improvement
+        
+        test = mortality_improvement['M']
+        
+        
         #Uplift Mortality rates by LTC rates
-        mortality['M'] = np.minimum(mortality['M'] * (1 + ltc['M']),1)
-        mortality['F'] = np.minimum(mortality['F'] * (1 + ltc['F']),1)
+        mortality['M'] = np.minimum(mortality['M'] * (1 + ltc['M']) * (1 - mortality_improvement['M']),1)
+        mortality['F'] = np.minimum(mortality['F'] * (1 + ltc['F']) * (1 - mortality_improvement['F']),1)
         
         #Produce Mortality rates by period
         mortality['F'] = 1 - np.power(1 - mortality['F'],1/freq)
@@ -148,14 +171,7 @@ if valuation_method == "Moodys":
         male_qx.index = range(0,len(male_qx))
         
         #Smooth Mortality rates
-        def lin_interp(array, frequency): #linear interpolation function
-            for i in range(len(array)-frequency):
-                j = i + frequency
-                lower_scale = 1 - np.mod(i,frequency)/frequency 
-                upper_scale = np.mod(i,frequency)/frequency 
-                array[i] = array[i]*lower_scale + array[j]*upper_scale
-                
-            return array
+
         
         female_qx = lin_interp(female_qx, freq)
         male_qx = lin_interp(male_qx, freq)
@@ -257,20 +273,21 @@ if valuation_method == "Moodys":
                 ith_olb_proj_nneg = np.minimum(ith_olb_proj, ith_prop_proj)
                 
             elif nneg_method == "BS":    
-                F = ith_prop_proj #spot
-                X = ith_olb_proj #strike
+                F = ith_prop_proj.flatten() #spot
+                X = ith_olb_proj.flatten() #strike
                 r=0 #rfr - should also allow for deferrment rate
                 sigma = 0.11 #implied vol
-                T = periods/12 #time to maturity
+                T = (periods/12).flatten() #time to maturity
                                
-                d1 = (np.log(F/X) + np.array(T * (r +(sigma**2)/2)).reshape(len(T))) / (np.sqrt(T) * sigma).reshape(len(T))
+                #d1 = (np.log(F/X) + np.array(T * (r +(sigma**2)/2)).reshape(len(T))) / (np.sqrt(T) * sigma).reshape(len(T))
+                d1 = black_scholes_76(F, X, r, sigma, T)
                 d2 = d1 -  (np.sqrt(T) * sigma).reshape(len(T))
-                
+
                 put_value = X * np.exp(-r*T).reshape(len(T)) * scipy.stats.norm.cdf(-d2) - F * scipy.stats.norm.cdf(-d1)
-                                
+  
                 recovery_rate = 1 - (put_value / ith_olb_proj)
-                ith_olb_proj_nneg = ith_olb_proj * recovery_rate
-                 
+                ith_olb_proj_nneg = ith_olb_proj * recovery_rate       
+
             else: print ("select a valid nneg methodology")
             
             #Decrement rate adjustment for nneg
@@ -315,7 +332,7 @@ if valuation_method == "Moodys":
             #Calculate Mortality Cashflows
             mortality_cfs = ith_olb_proj_nneg * ith_decrement_proj
             mortality_cfs = np.nan_to_num(mortality_cfs)
-            mortality_cfs = pd.Series(mortality_cfs)
+            
             
           
             #Calculate Prepayment Cashflows
@@ -326,13 +343,15 @@ if valuation_method == "Moodys":
 
             #Allow for settlement delay
             mortality_cfs = np.pad(mortality_cfs, int((freq/12)*set_delay), mode = 'constant', constant_values = 0)
+            mortality_cfs = mortality_cfs[:proj_term]
             ver_cfs = np.pad(ver_cfs, int((freq/12)*set_delay), mode = 'constant', constant_values = 0)
+            ver_cfs = ver_cfs[:proj_term]
             
             #Calculate servicing fee cashflows
             service_fee_cfs = ith_olb_proj[1:] * ith_mort_survival[:-1] * ith_ver_proj[:-1] * ith_service_fee/freq
             service_fee_cfs = np.insert(service_fee_cfs, 0, 0)
+            service_fee_cfs = pd.Series(service_fee_cfs)[:proj_term]
 
-            test = ith_mort_survival[1:] * ith_ver_proj[1:]
             
             #Calculate OLB after allowing for decrements
             ith_outstanding_olb = ith_olb_proj * ith_mort_survival
@@ -342,6 +361,8 @@ if valuation_method == "Moodys":
             prepayment_income.append(ver_cfs)
             service_fee_outgo.append(service_fee_cfs)
             outstanding_olb.append(ith_outstanding_olb)
+            
+            
         
         # Calculate total income
         try:
@@ -350,8 +371,8 @@ if valuation_method == "Moodys":
             total_prepayment_income = pd.concat(prepayment_income).groupby(level=0).sum()
             total_service_fee = pd.concat(service_fee_outgo).groupby(level=0).sum()
             total_olb = pd.concat(outstanding_olb).groupby(level=0).sum()
-            total_nneg = 1
-            
+
+
         except:
             # Fall back to simple sum if concat doesn't work
             from itertools import zip_longest
@@ -360,19 +381,24 @@ if valuation_method == "Moodys":
             total_service_fee = [sum(x) for x in zip_longest(*service_fee_outgo, fillvalue=0)]           
             total_olb = [sum(x) for x in zip_longest(*outstanding_olb, fillvalue=0)]
             
-            
+        
+        #Set cashflows to output frequency
+        #total_decrement_income_quart = np.array(total_decrement_income).reshape(-1,200).sum(axis=1)
+
+        
+        
         # Store in output dictionary
         cf_output_dictionary[f'{runlist[j]} mortality income'] = total_decrement_income
         cf_output_dictionary[f'{runlist[j]} prepayment income'] = total_prepayment_income
-        #cf_output_dictionary[f'{runlist[j]} service fee'] = total_service_fee
+        cf_output_dictionary[f'{runlist[j]} service fee'] = total_service_fee
         
         olb_output_dictionary[f'{runlist[j]} OLB'] = total_olb
         
-elif valuation_method == "Fitch":
-    ''' Create Fitch methodology 
-    '''
+    elif valuation_method == "Fitch":
+        ''' Create Fitch methodology 
+        '''
 
-else: print ("Select a valid valuation method")
+    else: print ("Select a valid valuation method")
 
     
 #########################################
@@ -390,11 +416,10 @@ with pd.ExcelWriter("output.xlsx", engine = 'xlsxwriter') as writer:
     olb_output.to_excel(writer, sheet_name="OLB")
 
 
-
+#Open the workbook
 import xlwings as xw
-
 xw.Book(output_filepath)
-#open(output_filepath)
+
 
 end_time = time.time()
 execution_time = end_time - start_time
