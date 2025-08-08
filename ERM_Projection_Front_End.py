@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 Created on Wed Jul 30 10:51:04 2025
-
 @author: UG423NJ
 """
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import os
 import subprocess
 from openpyxl import load_workbook
@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 st.set_page_config(page_title="ERM Projection Interface", layout="wide")
 
 # --- Load Scenario Parameters ---
-@st.cache_data
+#@st.cache_data
 def load_scenarios(file_path, sheet_name):
     df = pd.read_excel(file_path, sheet_name, header=0)
     df.columns = [str(col).strip() for col in df.columns]
@@ -32,6 +32,57 @@ def load_scenarios(file_path, sheet_name):
             new_columns.append(col)
     df.columns = new_columns
     return df
+
+
+@st.cache_data
+def load_mpf_summary(file_path):
+    mpf = pd.read_csv(file_path)
+    #mpf = pd.read_csv('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/MPF_Phoenix_Internal.csv')
+    
+    count_model_points = len(mpf)
+    count_joint_life = sum(mpf['Joint Life'] == 'Joint Life')
+    count_single_life = sum(mpf['Joint Life'] == 'Single')
+    count_male1 = sum(mpf['Gender 1'] == "Male")
+    count_female1 = sum(mpf['Gender 1'] == "Female")
+    count_male2 = sum(mpf['Gender 2'] == "Male")
+    count_female2 = sum(mpf['Gender 2'] == "Female")
+    average_age1 = np.average(mpf['Age 1'])
+    average_age2 = np.nanmean(mpf['Age 2'])
+    weighted_ltv = sum(mpf['LTV'] * mpf['Loan Amount'])/sum(mpf['Loan Amount'])
+    weighted_aer = sum(mpf['AER'] * mpf['Loan Amount'])/sum(mpf['Loan Amount'])
+    average_property = np.average(mpf['Loan Amount'] / mpf['LTV'])
+    
+    mpf_summary = pd.DataFrame({
+    "Metric": [
+        "Total Model Points",
+        "Joint Life Count",
+        "Single Life Count",
+        "Male (Primary)",
+        "Female (Primary)",
+        "Male (Secondary)",
+        "Female (Secondary)",
+        "Average Age (Primary)",
+        "Average Age (Secondary",
+        "Weighted LTV",
+        "Weighted AER",
+        "Average Property Value"
+    ],
+    "Value": [
+        count_model_points,
+        count_joint_life,
+        count_single_life,
+        count_male1,
+        count_female1,
+        count_male2,
+        count_female2,
+        average_age1,
+        average_age2,
+        weighted_ltv,
+        weighted_aer,
+        average_property
+    ]
+})
+    return mpf_summary
 
 
 # --- Load Model Output ---
@@ -85,14 +136,20 @@ def run_model():
 
 # --- UI Layout ---
 st.title("ERM Projection")
+page = st.sidebar.radio("Go to", ["Model Point File","Global Parameters", "Scenario Parameters", "Model Output"])
 
-tab1, tab2, tab3 = st.tabs(["Global Parameters", "Scenario Parameters", "Model Output"])
 
-# --- Tab 1: Global Parameters ---
-with tab1:
-    st.subheader("Global Parameters")
+if page == "Model Point File":
+    st.write("Review Model Points")
+    model_point_summary = load_mpf_summary("C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/MPF_Phoenix_Internal.csv") 
+    st.session_state["MPF"] = model_point_summary
+    st.dataframe(model_point_summary, hide_index=True)
+
+if page == "Global Parameters":
+    st.write("Set Global Parameters")
+    
     global_df = load_scenarios("C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/Master_Input.xlsx", 'Global_Parameters')
-    global_df[global_df.columns[1]] = global_df[global_df.columns[1]].astype(str) #format the value column as string to allow editing. Model script converts to necesary formats
+    global_df[global_df.columns[1]] = global_df[global_df.columns[1]].astype(str) #format the value column as string to allow editing. Model script converts to necessary formats
     edited_global_df = st.data_editor(
         global_df,
         num_rows="dynamic",
@@ -105,23 +162,20 @@ with tab1:
                 }
 
     )
+
     st.session_state["global_params"] = edited_global_df
     
+    if st.button("Save Global Parameters"):
+         save_edited_parameters(
+             edited_global_df,
+             sheet_name="Global_Parameters",
+             file_path="C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/Master_Input.xlsx"
+         )
+        
 
 
-
-# Save button clearly placed below the editor
-    if st.button("💾 Save Global Parameters"):
-        save_edited_parameters(edited_global_df, 'Global_Parameters')
-        st.success("Parameters saved to Master_Input_Edited.xlsx. You can now run the model using these inputs.")
-
-
-
-
-
-# --- Tab 1: Scenario Parameters ---
-with tab2:
-    st.subheader("Edit Scenario Parameters")
+if page == "Scenario Parameters":
+    st.write("Set Scenario Parameters")
     scenario_df = load_scenarios("C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/Master_Input.xlsx", 'Scenario_Parameters')
     edited_df = st.data_editor(
         scenario_df,
@@ -130,21 +184,19 @@ with tab2:
         hide_index=True,
         key="scenario_editor"
     )
-    
+
     
     st.session_state["edited_scenarios"] = edited_df
+    
+    if st.button("Save Scenario Parameters"):
+         save_edited_parameters(
+             edited_df,
+             sheet_name="Scenario_Parameters",
+             file_path="C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/Master_Input.xlsx"
+         )
+         
 
-# Save button clearly placed below the editor
-    if st.button("💾 Save Scenario Parameters"):
-        save_edited_parameters(edited_df, 'Scenario_Parameters')
-        st.success("Parameters saved to Master_Input_Edited.xlsx. You can now run the model using these inputs.")
-
-    #st.session_state["edited_scenarios"] = edited_df
-
-
-
-# --- Tab 3: Model Output ---
-with tab3:
+if page == "Model Output":
     st.subheader("Run Model and View Output")
     if st.button("Run ERM Model"):
         cashflows_df, olb_df = run_model()
@@ -153,4 +205,6 @@ with tab3:
             st.dataframe(cashflows_df)
             st.subheader("OLB")
             st.dataframe(olb_df)
+
+
 

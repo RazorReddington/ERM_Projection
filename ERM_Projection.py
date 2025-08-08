@@ -10,6 +10,7 @@ import pandas as pd
 import os
 import scipy
 import time
+from datetime import datetime
 
 # Record start time
 start_time = time.time()
@@ -27,11 +28,13 @@ global_parameters = pd.read_excel('Master_Input.xlsx',sheet_name= 'Global_Parame
 working_directory = global_parameters['Value'][0]
 mpf = pd.read_csv(global_parameters['Value'][1])
 valdate = global_parameters['Value'][2]
-proj_years = int(global_parameters['Value'][3])
-freq = int(global_parameters['Value'][4])
+first_ipd = global_parameters['Value'][3]
+proj_years = int(global_parameters['Value'][4])
+freq = int(global_parameters['Value'][5])
 proj_term = proj_years * freq + 1
-output_filepath = global_parameters['Value'][5]
-output_freq = int(global_parameters['Value'][6])
+date_proj = pd.date_range(start = valdate,end = None,periods = proj_term, freq= 'ME')
+output_filepath = global_parameters['Value'][6]
+output_freq = int(global_parameters['Value'][7])
 
 
 #Remove non running scenarios
@@ -43,8 +46,50 @@ runlist = list(scenario_parameters['Name'])
 
 #Clean MPF
 
+############## Functions ##############
+from numba import njit
+@njit(fastmath = True)
+def black_scholes_76(F, X, r, sigma, T):
+    d1 = (np.log(F / X) + T * (r + 0.5 * sigma ** 2)) / (np.sqrt(T) * sigma)    
+    return d1
+
+def lin_interp(array, frequency): #linear interpolation function - set up for conservative, may need i-1 changed to - for Moody's
+    for i in range(len(array)-frequency):
+        j = i + frequency
+        lower_scale = 1 - np.mod(i-1,frequency)/frequency 
+        upper_scale = np.mod(i-1,frequency)/frequency 
+        array[i] = array[i]*lower_scale + array[j]*upper_scale    
+    return array
+
+def load_tables(file_list):
+    return {
+        os.path.splitext(filename)[0]: pd.read_csv(filename)
+        for filename in file_list
+    }
 
 
+
+def get_value(row, df):
+    age = row['Age']
+    year = row.name  # since year is the index in df2
+    try:
+        return df.loc[df['Age'] == age, str(year)].values[0]
+    except IndexError:
+        return None  
+                
+
+######### Load Data ################
+mortality_tables = load_tables(scenario_parameters["Mortality Table"])
+ver_tables = load_tables(scenario_parameters["VER Table"])
+hpi_tables = load_tables(scenario_parameters["HPI"])
+ltc_tables = load_tables(scenario_parameters["LTC"])
+male_mort_improv_tables = load_tables(scenario_parameters["Male Mortality Improvement"])
+female_mort_improv_tables = load_tables(scenario_parameters["Female Mortality Improvement"])
+
+
+
+
+'''
 
 #Import Mortality Assumptions
 mortality_tables ={}
@@ -73,29 +118,19 @@ for filename in scenario_parameters["LTC"]:
     name = os.path.splitext(filename)[0]
     ltc_tables[name] = df    
 
-mort_improv_tables = {}
-for filename in scenario_parameters["Mortality Improvement"]:       
+male_mort_improv_tables = {}
+for filename in scenario_parameters["Male Mortality Improvement"]:       
     df = pd.read_csv(filename)
     name = os.path.splitext(filename)[0]
-    mort_improv_tables[name] = df 
+    male_mort_improv_tables[name] = df 
 
+female_mort_improv_tables = {}
+for filename in scenario_parameters["Female Mortality Improvement"]:       
+    df = pd.read_csv(filename)
+    name = os.path.splitext(filename)[0]
+    female_mort_improv_tables[name] = df 
+'''
 
-
-############## Functions ##############
-from numba import njit
-@njit(fastmath = True)
-def black_scholes_76(F, X, r, sigma, T):
-    d1 = (np.log(F / X) + T * (r + 0.5 * sigma ** 2)) / (np.sqrt(T) * sigma)    
-    return d1
-
-def lin_interp(array, frequency): #linear interpolation function
-    for i in range(len(array)-frequency):
-        j = i + frequency
-        lower_scale = 1 - np.mod(i,frequency)/frequency 
-        upper_scale = np.mod(i,frequency)/frequency 
-        array[i] = array[i]*lower_scale + array[j]*upper_scale
-        
-    return array
 
 
 #################### Projection - Scenario Agnostic ####################
@@ -122,19 +157,21 @@ property_output_dictionary = {}
 for j in range(len(runlist)):
     scenario = runlist[j]
     mortality = mortality_tables[scenario_parameters['Mortality Table'][j][:-4]]
-    mortality_improvement = mort_improv_tables[scenario_parameters['Mortality Improvement'][j][:-4]]
+    mortality.index = mortality['Age']
+    male_mortality_improvement = male_mort_improv_tables[scenario_parameters['Male Mortality Improvement'][j][:-4]]
+    female_mortality_improvement = female_mort_improv_tables[scenario_parameters['Female Mortality Improvement'][j][:-4]]
     ver = ver_tables[scenario_parameters['VER Table'][j][:-4]]
     hpi = hpi_tables[scenario_parameters['HPI'][j][:-4]]
     ltc = ltc_tables[scenario_parameters['LTC'][j][:-4]]
     set_delay = scenario_parameters['Settlement Delay (Alive)'][j]
     prop_haircut = scenario_parameters['Property Haircut'][j]
     sales_cost = scenario_parameters['Sales Cost'][j]
-    valuation_method = scenario_parameters['Valuation Method'][j] #Moodys or Fitch
+    valuation_method = scenario_parameters['Valuation Method'][j] #Moodys or Fitch or Conservative
     nneg_method = scenario_parameters['NNEG Approach'][j]
 
 
 
-    if valuation_method == "Moodys":
+    if valuation_method == "Conservative" or "Moodys":
 
 
         #---------------HPI Projection------------------
@@ -150,19 +187,116 @@ for j in range(len(runlist)):
         youngest = min(mortality['Age'])
         oldest = max(mortality['Age'])
         max_rates = (oldest - youngest + 1) * freq
+        male_mortality = {}
+        female_mortality = {}
+
+        if valuation_method == "Conservative":
+        #Uplift Mortality rates by LTC rates
+            mortality['M'] = np.minimum(mortality['M'] * (1 + ltc['M']),1) 
+            mortality['F'] = np.minimum(mortality['F'] * (1 + ltc['F']),1) 
+            
+            
+        #Allow fo Mortality Improvement
+
+            for i in range(len(mortality)):
+                #Calculate male monthly qx rates, allowing for LTC and mortality improvement
+                i=29
+                m_mort_improvement = pd.DataFrame(index = date_proj.year)
+                m_age = int(male_mortality_improvement.iloc[i].iloc[0])
+                m_age_array = np.floor(m_age + periods/freq).astype(int) #this is 1 month out of excel model
+                m_mort_improvement['Age'] = m_age_array
+                m_mort_improvement['Factor'] = m_mort_improvement.apply(lambda row: get_value(row, male_mortality_improvement), axis=1)
+                m_mort_improvement.index = (m_mort_improvement['Age'])
+                
+                
+                '''
+                This line
+                '''
+                m_mort_improvement['qx'] = m_mort_improvement.index.map(mortality['M'])
+                
+                m_qx = 1 - (1 - m_mort_improvement['Factor'] * m_mort_improvement['qx'])**(1/freq)
+                m_qx.index = range(proj_term)  
+                m_qx = lin_interp(m_qx, freq)
+                m_qx[0] = 0
+                male_mortality[m_age] = m_qx
+                
+                #Calculate female monthly qx rates, allowing for LTC and mortality improvement
+                f_mort_improvement = pd.DataFrame(index = date_proj.year)
+                f_age = int(female_mortality_improvement.iloc[i].iloc[0])
+                f_age_array = np.floor(f_age-0.0001 + periods/freq).astype(int) #this is same as excel model
+                f_mort_improvement['Age'] = f_age_array
+                f_mort_improvement['Factor'] = f_mort_improvement.apply(lambda row: get_value(row, female_mortality_improvement), axis=1)
+                f_mort_improvement.index = (f_mort_improvement['Age'])
+                f_mort_improvement['qx'] = f_mort_improvement['Age'].map(mortality['F'])
+                f_qx = 1 - (1 - f_mort_improvement['Factor'] * f_mort_improvement['qx'])**(1/freq)
+                f_qx.index = range(proj_term)
+                f_qx = lin_interp(f_qx, freq)
+                f_qx[0]=0
+                female_mortality[f_age] = f_qx
+                
+
+                
+
         
         #Mortality Improvement
         
-        test = mortality_improvement['M']
-        
-        
-        #Uplift Mortality rates by LTC rates
-        mortality['M'] = np.minimum(mortality['M'] * (1 + ltc['M']) * (1 - mortality_improvement['M']),1)
-        mortality['F'] = np.minimum(mortality['F'] * (1 + ltc['F']) * (1 - mortality_improvement['F']),1)
-        
+        elif valuation_method == 'Moodys':
+            mortality['M'] = np.minimum(mortality['M'], 1)
+            mortality['F'] = np.minimum(mortality['F'], 1)
+            mortality_improvement = male_mortality_improvement #could try and tidy this - Moody's improv factor tables not split by sex
+            mortality_improvement.index = mortality_improvement['Age']
+            
+            for i in range(len(mortality)):
+                #Calculate male monthly qx rates, allowing for mortality improvement only
+                mort_improv_array = np.cumprod(1 - mortality_improvement['M'][i:])
+                m_qx = 1 - (1 - mort_improv_array * mortality['M'][i:])**(1/freq)
+                m_qx = np.repeat(m_qx, freq)
+                m_qx = np.pad(m_qx,(1,max(proj_term - len(m_qx) - 1,0)),mode = 'constant', constant_values = (0,1) )
+                m_qx = m_qx[:proj_term]
+                m_qx = lin_interp(m_qx[:proj_term], freq)
+                m_qx[0] = 0
+                m_qx = pd.Series(m_qx)
+                male_mortality[i + youngest] = m_qx
+                
+                
+                f_qx = 1 - (1 - mort_improv_array * mortality['F'][i:])**(1/freq)
+                f_qx = np.repeat(f_qx, freq)
+                f_qx = np.pad(f_qx,(1,max(proj_term - len(f_qx) - 1,0)),mode = 'constant', constant_values = (0,1) )
+                f_qx = f_qx[:proj_term]
+                f_qx = lin_interp(f_qx[:proj_term], freq)
+                f_qx[0] = 0
+                f_qx = pd.Series(f_qx)
+                female_mortality[i + youngest] = f_qx
+
+                
+   
+                
+    
+                '''
+                male_mort_improv_dict[i + youngest] = male_mort_improv_array
+                female_mort_improv_dict[i + youngest] = female_mort_improv_array
+                
+                
+                
+                male_mort_improv_dict = {
+                    key: np.pad(arr[:proj_term], (0, max(0, proj_term - len(arr))), constant_values=0)
+                    for key, arr in male_mort_improv_dict.items()
+                }
+    
+                female_mort_improv_dict = {
+                    key: np.pad(arr[:proj_term], (0, max(0, proj_term - len(arr))), constant_values=0)
+                    for key, arr in female_mort_improv_dict.items()
+                }
+                '''
+       
+            #################       
+ 
+ 
+        '''
         #Produce Mortality rates by period
         mortality['F'] = 1 - np.power(1 - mortality['F'],1/freq)
         mortality['M'] = 1 - np.power(1 - mortality['M'],1/freq)
+        
         
         #Produce qx projections
         female_qx = np.repeat(mortality['F'],freq)
@@ -171,11 +305,9 @@ for j in range(len(runlist)):
         male_qx.index = range(0,len(male_qx))
         
         #Smooth Mortality rates
-
-        
         female_qx = lin_interp(female_qx, freq)
         male_qx = lin_interp(male_qx, freq)
-        
+        '''
         
         #Produce ver exit rates
         female_ver = 1 - np.power((1 - ver['F']),1/12)
@@ -186,10 +318,6 @@ for j in range(len(runlist)):
         male_ver = np.repeat(male_ver,freq)
         male_ver.index = range(len(male_ver))
  
-        #ver_rates = {}
-        #ver_rates['Male'] = male_ver
-        #ver_rates['Female'] = female_ver
- 
 
         female_decrement_table = {} #initialise dictionaries
         female_ver_table = {}
@@ -199,8 +327,10 @@ for j in range(len(runlist)):
         male_ver_table = {}
         male_survival_table = {}
         male_ver_rates = {}
-        for i in range(len(mortality)):
-            #i=0
+        
+        #Project age dependent decrement arrays
+        for age in mortality.index:
+            i= age - youngest
             n = proj_term - 1
             k = i * freq
             l = k + n 
@@ -210,28 +340,27 @@ for j in range(len(runlist)):
             ver_survival_female = np.pad(ver_survival_female,(1,n - len(ver_survival_female)) , mode = 'constant', constant_values = (1,0)) #standardise array length
             female_ver_table[i + youngest] = ver_survival_female #collate arrays into a dictionary
             female_ver_rates[i + youngest] = np.pad(female_ver[k:l],(1,n - len(female_ver[k:l])), mode = 'constant', constant_values = 0)   
-            
-                     
-            ver_survival_male = (1-male_ver[k:l]).values.cumprod()
+                   
+            ver_survival_male = (1-male_ver[k:l]).values.cumprod() #previously k:l
             ver_survival_male = np.pad(ver_survival_male,(1,n - len(ver_survival_male)) , mode = 'constant', constant_values = (1,0))
             male_ver_table[i + youngest] = ver_survival_male
             male_ver_rates[i + youngest] = np.pad(male_ver[k:l],(1,n - len(male_ver[k:l])), mode = 'constant', constant_values = 0) 
         
             #Mortality
-            mort_survival_female = (1-female_qx[k:l]).values.cumprod()
-            mort_survival_female = np.pad(mort_survival_female,(1,n - len(mort_survival_female)) , mode = 'constant', constant_values = (1,0))
+            mort_survival_female = (1-female_mortality[age]).values.cumprod()
+            #mort_survival_female = np.pad(mort_survival_female,(1,n - len(mort_survival_female)) , mode = 'constant', constant_values = (1,0))
             female_survival_table [i + youngest] = mort_survival_female
-            #female_decrements = np.concatenate(([1-mort_survival_female[0]],(mort_survival_female[:-1] - mort_survival_female[1:])*ver_survival_female[:-1]))
-            #female_decrements = np.pad(female_decrements,(0,n - len(female_decrements)) , mode = 'constant', constant_values = 1)
-            #female_decrement_table[i + youngest] = female_decrements #Add to the dictionary
-        
-            mort_survival_male = (1-male_qx[k:l]).values.cumprod()
-            mort_survival_male = np.pad(mort_survival_male,(1,n - len(mort_survival_male)) , mode = 'constant', constant_values = (1,0))
+   
+            mort_survival_male = (1-male_mortality[age]).values.cumprod()
+            #mort_survival_male = np.pad(mort_survival_male,(1,n - len(mort_survival_male)) , mode = 'constant', constant_values = (1,0))
             male_survival_table [i + youngest] = mort_survival_male
-           #male_decrements = np.concatenate(([1-mort_survival_male[0]],(mort_survival_male[:-1] - mort_survival_male[1:])*ver_survival_male[:-1]))   
-            #male_decrements = np.pad(male_decrements,(0,n - len(male_decrements)) , mode = 'constant', constant_values = 1)
-            #male_decrement_table[i + youngest] = male_decrements #Add to the dictionary
+   
+    
+    
         
+  
+        
+
         #Compile rate dictionaries into parent dictionaries - avoids if statments later in the code 
         survival_rates = {}
         decrement_rates = {}
@@ -417,8 +546,8 @@ with pd.ExcelWriter("output.xlsx", engine = 'xlsxwriter') as writer:
 
 
 #Open the workbook
-import xlwings as xw
-xw.Book(output_filepath)
+#import xlwings as xw
+#xw.Book(output_filepath)
 
 
 end_time = time.time()
