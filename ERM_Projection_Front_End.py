@@ -34,10 +34,13 @@ def load_scenarios(file_path, sheet_name):
     return df
 
 
+
+
+
 @st.cache_data
 def load_mpf_summary(file_path):
     mpf = pd.read_csv(file_path)
-    #mpf = pd.read_csv('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/MPF_Phoenix_Internal.csv')
+   
     
     count_model_points = len(mpf)
     count_joint_life = sum(mpf['Joint Life'] == 'Joint Life')
@@ -126,6 +129,9 @@ def run_model():
     if result.returncode == 0:
         st.success("Model executed successfully.")
         return load_output("C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/output.xlsx")
+        
+ 
+    
     else:
         st.error("Model execution failed.")
         st.text(result.stderr)
@@ -136,14 +142,10 @@ def run_model():
 
 # --- UI Layout ---
 st.title("ERM Projection")
-page = st.sidebar.radio("Go to", ["Model Point File","Global Parameters", "Scenario Parameters", "Model Output"])
+page = st.sidebar.radio("Go to", ["Global Parameters", "Scenario Parameters", "Model Point File", "Model Output"])
 
 
-if page == "Model Point File":
-    st.write("Review Model Points")
-    model_point_summary = load_mpf_summary("C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/MPF_Phoenix_Internal.csv") 
-    st.session_state["MPF"] = model_point_summary
-    st.dataframe(model_point_summary, hide_index=True)
+
 
 if page == "Global Parameters":
     st.write("Set Global Parameters")
@@ -171,7 +173,6 @@ if page == "Global Parameters":
              sheet_name="Global_Parameters",
              file_path="C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/Master_Input.xlsx"
          )
-        
 
 
 if page == "Scenario Parameters":
@@ -195,16 +196,29 @@ if page == "Scenario Parameters":
              file_path="C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/Master_Input.xlsx"
          )
          
-
+if page == "Model Point File":
+    st.write("Review Model Points")
+    model_point_summary = load_mpf_summary("C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/MPF_Phoenix_Internal.csv") 
+    st.session_state["MPF"] = model_point_summary
+    st.dataframe(model_point_summary, hide_index=True)
+    
+    
 if page == "Model Output":
     st.subheader("Run Model and View Output")
     if st.button("Run ERM Model"):
         cashflows_df, olb_df = run_model()
+
+
         if cashflows_df is not None:
             st.subheader("Cashflows")
             st.dataframe(cashflows_df)
             st.subheader("OLB")
             st.dataframe(olb_df)
+            
+   
+    
+    #selected_run = st.selectbox("Select a run to view chart", list(chart_dict.keys()))
+    #st.pyplot(chart_dict[selected_run])
 
 
 
