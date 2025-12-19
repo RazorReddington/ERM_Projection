@@ -1,0 +1,9 @@
+﻿Mortgage ID,Joint Life,Age 1,Gender 1,Life 1 Status Change Date,Age 2,Gender 2,Life 2 Status Change Date,LTV,AER,Loan Amount,Completion Date,Servicing Fee,Portfolio,Valuation Date
+1,Single,81,Male,,,,,0.175372558,0.048,73625.17,02/11/2016,0.0015,Internal,45657
+2,Single,73,Female,,,,,0.327020891,0.0528,123315.03,20/12/2016,0.0015,Internal,45657
+3,Joint Life,76,Male,,74,Female,,0.317342186,0.0506,123891.19,08/11/2016,0.0015,Internal,45657
+4,Joint Life,92,Male,,120,Female,43691,0.213594295,0.046,144927.7,03/11/2016,0.0015,Internal,45657
+5,Joint Life,120,Male,45614,85,Female,,0.48609888,0.044840995,641194.04,09/11/2016,0.0015,Internal,45657
+6,Joint Life,96,Male,,87,Female,,0.451789145,0.074958297,331051.6,03/07/2003,0.0015,External,45657
+7,Single,86,Female,,,,,1.067042456,0.073783533,367879.81,21/02/2003,0.0015,External,45657
+8,Joint Life,120,Male,40771,95,Female,,1.289874116,0.064745415,196548.68,19/02/2007,0.0015,Internal,45657

@@ -10,10 +10,14 @@ import numpy as np
 import os
 import subprocess
 from openpyxl import load_workbook
+import plotly.graph_objects as go
+import time
+from datetime import datetime
 
 
 # --- Configuration ---
 st.set_page_config(page_title="ERM Projection Interface", layout="wide")
+
 
 # --- Load Scenario Parameters ---
 #@st.cache_data
@@ -32,8 +36,6 @@ def load_scenarios(file_path, sheet_name):
             new_columns.append(col)
     df.columns = new_columns
     return df
-
-
 
 
 
@@ -89,7 +91,7 @@ def load_mpf_summary(file_path):
 
 
 # --- Load Model Output ---
-@st.cache_data
+#@st.cache_data
 def load_output(file_path):
     cashflows = pd.read_excel(file_path, sheet_name="Cashflows")
     olb = pd.read_excel(file_path, sheet_name="OLB")
@@ -97,38 +99,31 @@ def load_output(file_path):
 
 
 
-def save_edited_parameters(df, sheet_name, file_path = 'C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/Master_Input.xlsx'):
-    # Load the existing workbook
+def save_edited_parameters(df, sheet_name, file_path):
     book = load_workbook(file_path)
 
-    # Remove the sheet if it already exists to avoid duplication
     if sheet_name in book.sheetnames:
         std = book[sheet_name]
         book.remove(std)
 
-    # Save the workbook temporarily without the target sheet
     temp_path = file_path.replace(".xlsx", "_temp.xlsx")
     book.save(temp_path)
 
-    # Now write the updated sheet
     with pd.ExcelWriter(temp_path, engine='openpyxl', mode='a') as writer:
         df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-    # Replace the original file with the updated one
-
     os.replace(temp_path, file_path)
-
     st.success(f"Edited parameters saved to sheet '{sheet_name}' in {file_path}")
 
 
 
 
 # --- Run ERM Model ---
-def run_model():
-    result = subprocess.run(["python", "ERM_Projection.py"], capture_output=True, text=True)
+def run_model(filepath):
+    result = subprocess.run(["python", filepath], capture_output=True, text=True)
     if result.returncode == 0:
         st.success("Model executed successfully.")
-        return load_output("C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/output.xlsx")
+        return load_output(Output)
         
  
     
@@ -139,18 +134,37 @@ def run_model():
 
 
 
+########################## Dashboard Design #################################
 
-# --- UI Layout ---
 st.title("ERM Projection")
-page = st.sidebar.radio("Go to", ["Global Parameters", "Scenario Parameters", "Model Point File", "Model Output"])
+page = st.sidebar.radio("Go to", ["File Paths", "Global Parameters", "Scenario Parameters", "Model Point File", "Model Output"])
 
 
+if page == "File Paths":
+    st.write("Set File Paths")
+    variable_names = ["Master Input Filepath", "MPF Filepath", "Output Filepath", "Model Filepath"]
+
+    for var in variable_names:
+        st.session_state[var] = st.text_input(f"Enter path for {var}", st.session_state.get(var, ""))
+
+    st.write("Collected File Paths:")
+    st.write({var: st.session_state.get(var) for var in variable_names})
+
+Master_Input = st.session_state.get("Master Input Filepath", "")
+MPF = st.session_state.get("MPF Filepath", "")
+Output = st.session_state.get("Output Filepath", "")
+model_filepath = st.session_state.get("Model Filepath", "")
+
+global_df = load_scenarios(Master_Input, 'Global_Parameters') #this raises an error on the dashboard before loading the filepaths - should look to resolve 
+#model_filepath = global_df.loc[global_df['Parameter'] == "Model Filepath", 'Value'].iloc[0]
+working_directory = global_df.loc[global_df['Parameter'] == "Working Directory", 'Value'].iloc[0]
 
 
 if page == "Global Parameters":
     st.write("Set Global Parameters")
+    global_df = load_scenarios(Master_Input, 'Global_Parameters')
+
     
-    global_df = load_scenarios("C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/Master_Input.xlsx", 'Global_Parameters')
     global_df[global_df.columns[1]] = global_df[global_df.columns[1]].astype(str) #format the value column as string to allow editing. Model script converts to necessary formats
     edited_global_df = st.data_editor(
         global_df,
@@ -171,13 +185,13 @@ if page == "Global Parameters":
          save_edited_parameters(
              edited_global_df,
              sheet_name="Global_Parameters",
-             file_path="C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/Master_Input.xlsx"
+             file_path= Master_Input
          )
 
 
 if page == "Scenario Parameters":
     st.write("Set Scenario Parameters")
-    scenario_df = load_scenarios("C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/Master_Input.xlsx", 'Scenario_Parameters')
+    scenario_df = load_scenarios(Master_Input, 'Scenario_Parameters')
     edited_df = st.data_editor(
         scenario_df,
         num_rows="dynamic",
@@ -193,12 +207,14 @@ if page == "Scenario Parameters":
          save_edited_parameters(
              edited_df,
              sheet_name="Scenario_Parameters",
-             file_path="C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/Master_Input.xlsx"
+             file_path= Master_Input
          )
+         
+
          
 if page == "Model Point File":
     st.write("Review Model Points")
-    model_point_summary = load_mpf_summary("C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data/MPF_Phoenix_Internal.csv") 
+    model_point_summary = load_mpf_summary(MPF) 
     st.session_state["MPF"] = model_point_summary
     st.dataframe(model_point_summary, hide_index=True)
     
@@ -206,19 +222,61 @@ if page == "Model Point File":
 if page == "Model Output":
     st.subheader("Run Model and View Output")
     if st.button("Run ERM Model"):
-        cashflows_df, olb_df = run_model()
+        username = os.environ.get('USERNAME')
+        runtime = datetime.now()
+        
+        
+      # Save to audit log file
+        log_entry = f"{runtime} | User: {username}\n"
+        file_path = os.path.join(working_directory, "audit_log.txt")
+        with open(file_path, "a") as log_file:  # Append mode
+            log_file.write(log_entry)
 
+        st.success(f"Model run logged for {username} at {runtime}")
 
-        if cashflows_df is not None:
-            st.subheader("Cashflows")
-            st.dataframe(cashflows_df)
-            st.subheader("OLB")
-            st.dataframe(olb_df)
-            
-   
+        
+        st.session_state["cashflows_df"] = None
+        st.session_state["olb_df"] = None
+
+        cashflows_df, olb_df = run_model(model_filepath)
+        st.session_state["cashflows_df"] = cashflows_df
+        st.session_state["olb_df"] = olb_df
+        
+
+    if "cashflows_df" in st.session_state and st.session_state["cashflows_df"] is not None and \
+       "olb_df" in st.session_state and st.session_state["olb_df"] is not None:
     
-    #selected_run = st.selectbox("Select a run to view chart", list(chart_dict.keys()))
-    #st.pyplot(chart_dict[selected_run])
+        cashflows_df = st.session_state["cashflows_df"]
+        olb_df = st.session_state["olb_df"]
+    
+        olb_column = st.selectbox("Select OLB column to plot", options=olb_df.columns[1:])
+        cashflow_column = st.selectbox("Select Cashflow column to plot", options=cashflows_df.columns[1:])
+    
+        fig = go.Figure()
+    
+        fig.add_trace(go.Scatter(
+            x=cashflows_df.iloc[:, 0],  # Time axis
+            y=cashflows_df[cashflow_column],  # Cashflows
+            name=f"{cashflow_column}",
+            yaxis="y1"
+        ))
+    
+        fig.add_trace(go.Scatter(
+            x=olb_df.iloc[:, 0],  # Time axis
+            y=olb_df[olb_column],  # OLB
+            name=f"{olb_column}",
+            yaxis="y2"
+        ))
+    
+        fig.update_layout(
+            title="Cashflows and OLB Projection",
+            xaxis=dict(title="Time"),
+            yaxis=dict(title="Cashflows", side="left"),
+            yaxis2=dict(title="OLB", overlaying="y", side="right"),
+            legend=dict(x=0.9, y=0.99)
+        )
+    
+        st.plotly_chart(fig, use_container_width=True)
 
 
 

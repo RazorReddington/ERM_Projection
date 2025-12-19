@@ -12,15 +12,18 @@ import scipy
 import time
 import matplotlib.pyplot as plt
 from numba import njit
-
+from pathlib import Path
 # Record start time
 start_time = time.time()
 
-
 #Set Working Directory
-os.chdir('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection/Data')
-    
+try:
+    script_dir = Path(__file__).resolve().parent
+except NameError:
+    script_dir = Path.cwd()
 
+os.chdir(script_dir/'Data')
+    
 ############## Data ################
 #Import Parameters
 scenario_parameters = pd.read_excel('Master_Input.xlsx',sheet_name= 'Scenario_Parameters')
@@ -41,20 +44,12 @@ output_freq = int(global_parameters['Value'][7])
 #Remove non running scenarios
 scenario_parameters = scenario_parameters[scenario_parameters['Run'] == 'Y']
 scenario_parameters.index = range(len(scenario_parameters))
-#Set the scenario list
 runlist = list(scenario_parameters['Name'])
 
 
 #Clean MPF
 
 ############## Functions ##############
-'''
-@njit(fastmath = True)
-def black_scholes_76(F, X, r, sigma, T):
-    d1 = (np.log(F / X) + T * (r + 0.5 * sigma ** 2)) / (np.sqrt(T) * sigma)    
-    return d1
-
-'''
 
 @njit(fastmath=True)
 def black_scholes_76(F, X, r, sigma, T):
@@ -75,6 +70,21 @@ def black_scholes_76(F, X, r, sigma, T):
     return d1
 
 
+
+
+@njit(fastmath = True)
+def compute_recovery_olb(olb, aer, ver, term):
+    results = np.empty(term - 1)
+    i_0 = olb[0]
+    for i in range(proj_term - 1):
+        result = (i_0 * (1 + aer)) - ver[i + 1]
+        results[i] = result
+        i_0 = result
+    recovery_olb = np.concatenate((results, ver[1:]))
+    return recovery_olb
+
+
+
 def lin_interp(array, frequency): #linear interpolation function - set up for conservative, may need i-1 changed to - for Moody's
     for i in range(len(array)-frequency):
         j = i + frequency
@@ -88,8 +98,6 @@ def load_tables(file_list):
         os.path.splitext(filename)[0]: pd.read_csv(filename)
         for filename in file_list
     }
-
-
 
 def get_value(row, df):
     age = row['Age']
@@ -116,21 +124,19 @@ female_mort_improv_tables = load_tables(scenario_parameters["Female Mortality Im
 olb_array = np.array(mpf['Loan Amount']) #current outstanding loan balance
 eff_rate_array = (1+np.array(mpf['AER']))**(1/freq)-1 #effective rate for each model point, allows for the projection frequency
 service_fee = np.array(mpf['Servicing Fee'])
-#n = proj_years*freq #projection period
 periods = np.arange(0, proj_term).reshape(-1, 1)  #Term factor vector
 growth_factors = (1 + eff_rate_array) ** periods 
-
 olb_proj = pd.DataFrame(olb_array * growth_factors) #Projected outstanding loan balance
 base_property_values = list(mpf['Loan Amount']/mpf['LTV']) #Calculate t=0 property values 
 
 
-
 #################### Projection - Scenario Dependent ####################
 
-
+#Initialise output dictionarys
 cf_output_dictionary = {}
 olb_output_dictionary = {}
-property_output_dictionary = {}
+
+
 #Loop Through All scenarios
 for j in range(len(runlist)):
     scenario = runlist[j]
@@ -142,15 +148,15 @@ for j in range(len(runlist)):
     hpi = hpi_tables[scenario_parameters['HPI'][j][:-4]]
     ltc = ltc_tables[scenario_parameters['LTC'][j][:-4]]
     ltc.index = ltc['Age']
-    set_delay = scenario_parameters['Settlement Delay (Alive)'][j]
+    set_delay_mort_dead = scenario_parameters['Settlement Delay (Dead)'][j]
+    set_delay_mort_alive = scenario_parameters['Settlement Delay (Alive)'][j]
+    set_delay_ver = scenario_parameters['Settlement Delay (VER)'][j]
     prop_haircut = scenario_parameters['Property Haircut'][j]
     sales_cost = scenario_parameters['Sales Cost'][j]
+    age_setback = scenario_parameters['Age Setback'][j]
     valuation_method = scenario_parameters['Valuation Method'][j] #Moodys or Fitch or Conservative
     nneg_method = scenario_parameters['NNEG Approach'][j]
 
-
-
-    #if valuation_method == "Conservative" or "Moodys":
 
 
     #---------------HPI Projection------------------
@@ -159,8 +165,8 @@ for j in range(len(runlist)):
     hpi = pd.Series(np.insert(hpi,0,1))
     hpi.index = range(0,len(hpi)) #re-index
     
-    base_property_values = np.array(base_property_values) * (1 - prop_haircut) * (1 - sales_cost) #Allow for property haircut and cost of sale
-    property_projection = [base_property_values[i] * hpi for i in range(len(base_property_values))] #Project property values using HPI
+    scenario_property_values = np.array(base_property_values) * (1 - prop_haircut) * (1 - sales_cost) #Allow for property haircut and cost of sale
+    property_projection = [scenario_property_values[i] * hpi for i in range(len(scenario_property_values))] #Project property values using HPI
     
     #-------------Decrement Projection-----------------   
     youngest = min(mortality['Age'])
@@ -168,19 +174,24 @@ for j in range(len(runlist)):
     max_rates = (oldest - youngest + 1) * freq
     male_mortality = {}
     female_mortality = {}
+    
+    #Initialise empty LTC scalars - this accomodates the Moody's LTC approach without forking the code
+    male_ltc = {age: np.ones(proj_term) for age in range(youngest, oldest + 1)} 
+    female_ltc = male_ltc
 
     if valuation_method == "Conservative":
-    #Uplift Mortality rates by LTC rates
+        #Uplift Mortality rates by LTC rates
         mortality['M'] = np.minimum(mortality['M'] * (1 + ltc['M']),1) 
         mortality['F'] = np.minimum(mortality['F'] * (1 + ltc['F']),1) 
         
-        
+  
         #Allow fo Mortality Improvement
         for i in range(len(mortality)):
+            
             #Calculate male monthly qx rates, allowing for LTC and mortality improvement
             m_mort_improvement = pd.DataFrame(index = date_proj.year)
             m_age = int(male_mortality_improvement.iloc[i].iloc[0])
-            m_age_array = np.floor(m_age + periods/freq).astype(int) #this is 1 month out of excel model
+            m_age_array = np.floor(m_age-0.0001 + periods/freq).astype(int) #the -0.0001 makes this the same as excel model
             m_mort_improvement['Age'] = m_age_array
             m_mort_improvement['Factor'] = m_mort_improvement.apply(lambda row: get_value(row, male_mortality_improvement), axis=1)
             m_mort_improvement.index = (m_mort_improvement['Age'])
@@ -209,19 +220,15 @@ for j in range(len(runlist)):
             f_qx[0]=0
             female_mortality[f_age] = f_qx
             
-            
-            
-            
-            
+   
     elif valuation_method == "Fitch":
-        
-        
-        
+
         #Uplift Mortality rates by LTC rates
         mortality['M'] = np.minimum(mortality['M'] * (1 + ltc['M']),1) 
         mortality['F'] = np.minimum(mortality['F'] * (1 + ltc['F']),1) 
-        for i in range(len(mortality)):
 
+        for i in range(len(mortality)):
+            
             m_qx = 1 - (1 - mortality['M'][i:])**(1/freq)
             m_qx = np.repeat(m_qx, freq)
             m_qx = np.pad(m_qx,(1,max(proj_term - len(m_qx) - 1,0)),mode = 'constant', constant_values = (0,1) )
@@ -230,7 +237,7 @@ for j in range(len(runlist)):
             m_qx[0] = 0
             m_qx = pd.Series(m_qx)
             male_mortality[i + youngest] = m_qx
-        
+            
         
             f_qx = 1 - (1 - mortality['F'][i:])**(1/freq)
             f_qx = np.repeat(f_qx, freq)
@@ -241,18 +248,20 @@ for j in range(len(runlist)):
             f_qx = pd.Series(f_qx)
             female_mortality[i + youngest] = f_qx
         
-        mortality_rates = {'Male': male_mortality, 'Female': female_mortality}
-        
- 
-        
+  
     elif valuation_method == 'Moodys':
         mortality['M'] = np.minimum(mortality['M'], 1)
         mortality['F'] = np.minimum(mortality['F'], 1)
         mortality_improvement = male_mortality_improvement #could try and tidy this - Moody's improv factor tables not split by sex
         mortality_improvement.index = mortality_improvement['Age']
         
-        #Allow for Mortality Improvement
+        m_ltc_uplift = 1 - (1 - ltc['M'])**(1/freq)
+        f_ltc_uplift = 1 - (1 - ltc['F'])**(1/freq) 
+
+        
+        #Allow for Mortality Improvement and LTC
         for i in range(len(mortality)):
+            #i=31
             #Calculate male monthly qx rates, allowing for mortality improvement only
             mort_improv_array = np.cumprod(1 - mortality_improvement['M'][i:])
             m_qx = 1 - (1 - mort_improv_array * mortality['M'][i:])**(1/freq)
@@ -264,7 +273,13 @@ for j in range(len(runlist)):
             m_qx = pd.Series(m_qx)
             male_mortality[i + youngest] = m_qx
             
-            
+            #Create LTC uplift rates 
+            ith_m_ltc_uplift = m_ltc_uplift[i:]
+            ith_m_ltc_uplift = np.repeat(ith_m_ltc_uplift, freq)
+            ith_m_ltc_uplift = np.pad(ith_m_ltc_uplift[:proj_term-1], (1,max(proj_term - len(ith_m_ltc_uplift) - 1, 0 )))
+            m_ltc_survival = np.cumprod(1 - ith_m_ltc_uplift)
+            male_ltc[i + youngest] = m_ltc_survival
+
             f_qx = 1 - (1 - mort_improv_array * mortality['F'][i:])**(1/freq)
             f_qx = np.repeat(f_qx, freq)
             f_qx = np.pad(f_qx,(1,max(proj_term - len(f_qx) - 1,0)),mode = 'constant', constant_values = (0,1) )
@@ -273,7 +288,16 @@ for j in range(len(runlist)):
             f_qx[0] = 0
             f_qx = pd.Series(f_qx)
             female_mortality[i + youngest] = f_qx
+ 
+            ith_f_ltc_uplift = f_ltc_uplift[i:]
+            ith_f_ltc_uplift = np.repeat(ith_f_ltc_uplift, freq)
+            ith_f_ltc_uplift = np.pad(ith_f_ltc_uplift[:proj_term-1], (1,max(proj_term - len(ith_f_ltc_uplift) - 1, 0 )))
+            f_ltc_survival = np.cumprod(1 - ith_f_ltc_uplift)
+            female_ltc[i + youngest] = f_ltc_survival
 
+
+    mortality_rates = {'Male': male_mortality, 'Female': female_mortality}
+    
 
     #Produce ver exit rates
     female_ver = 1 - np.power((1 - ver['F']),1/12)
@@ -313,12 +337,10 @@ for j in range(len(runlist)):
         male_ver_rates[i + youngest] = np.pad(male_ver[k:l],(1,n - len(male_ver[k:l])), mode = 'constant', constant_values = 0) 
     
         #Mortality
-        mort_survival_female = (1-female_mortality[age]).values.cumprod()
-        #mort_survival_female = np.pad(mort_survival_female,(1,n - len(mort_survival_female)) , mode = 'constant', constant_values = (1,0))
-        female_survival_table [i + youngest] = mort_survival_female
-   
-        mort_survival_male = (1-male_mortality[age]).values.cumprod()
-        #mort_survival_male = np.pad(mort_survival_male,(1,n - len(mort_survival_male)) , mode = 'constant', constant_values = (1,0))
+        mort_survival_female = (1-female_mortality[age]).values.cumprod() * female_ltc[age]
+        female_survival_table [i + youngest] = mort_survival_female 
+        
+        mort_survival_male = (1-male_mortality[age]).values.cumprod() * male_ltc[age]
         male_survival_table [i + youngest] = mort_survival_male
    
 
@@ -338,32 +360,34 @@ for j in range(len(runlist)):
     
 #################### Projection - Model Point Dependent #################### 
 
-
     decrement_income = [] #Create empty lists to collect individual cashflows
     prepayment_income = []
     service_fee_outgo =[]
     outstanding_olb = []
 
     for i in range(len(mpf)):            
-     
-        i = 0
+        #i=5263
         #Get demographics for current model point
         gender1 = mpf['Gender 1'][i]
-        age1 = mpf['Age 1'][i]
+        age1 = mpf['Age 1'][i] - age_setback
         gender2 = mpf['Gender 2'][i]
-        age2 = mpf['Age 2'][i]
+        age2 = mpf['Age 2'][i] - age_setback
         policy_type = mpf['Joint Life'][i]
+        min_age = min(age1,age2)
         
-
+        if min_age >=120:
+            set_delay_mort = set_delay_mort_dead  
+        else:
+            set_delay_mort = set_delay_mort_alive
+                
         ith_service_fee = service_fee[i]
         ith_prop_proj = np.array(property_projection[i])
         ith_olb_proj = np.array(olb_proj[i])
         ith_aer = eff_rate_array[i]
-        ith_mortality_rate = mortality_rates[gender1][age1]
-        
-        
+
         #Allow for NNEG
         if nneg_method == "Intrinsic":
+
             ith_olb_proj_nneg = np.minimum(ith_olb_proj, ith_prop_proj)
             
         elif nneg_method == "BS":    
@@ -371,7 +395,7 @@ for j in range(len(runlist)):
             X = ith_olb_proj.flatten() #strike
             r=0 #rfr - should also allow for deferrment rate
             sigma = 0.11 #implied vol
-            T = (periods/12).flatten() #time to maturity
+            T = (periods/freq).flatten() #time to maturity
                            
             #d1 = (np.log(F/X) + np.array(T * (r +(sigma**2)/2)).reshape(len(T))) / (np.sqrt(T) * sigma).reshape(len(T))
             d1 = black_scholes_76(F, X, r, sigma, T)
@@ -385,88 +409,112 @@ for j in range(len(runlist)):
         else: print ("select a valid nneg methodology")
         
         #Decrement rate adjustment for nneg
-                  
-        rational_ver = ith_olb_proj < ith_prop_proj
-        
-        
+        if valuation_method == "Fitch":
+            rational_ver = (ith_olb_proj * ver_survival[gender1][min_age]) < ith_prop_proj
+        else:
+            rational_ver = ith_olb_proj < ith_prop_proj
         
         
 
-        
-        
-        
-        
-  
         if policy_type == 'Single':
-            ith_mort_survival = survival_rates[gender1][age1]
-            
+
             ith_ver_proj = ver_survival[gender1][age1] 
             ith_ver_proj[~rational_ver] = 1 #Need to be careful of this - if a scenario exists such that NNEG can move from inside to outside the money - this projeciton will be wrong
-            
             ith_ver_rate = ver_rates[gender1][age1]
             ith_ver_rate[~rational_ver] = 0 
             
+            ith_mort_survival = survival_rates[gender1][age1]
             ith_decrement_proj = (ith_mort_survival[:-1] - ith_mort_survival[1:]) * ith_ver_proj[:-1]
             ith_decrement_proj = np.insert(ith_decrement_proj,0,0)
+            ith_mortality_rate = mortality_rates[gender1][age1]
             
+           
             
         elif policy_type == 'Joint Life':
             
-            ith_mort_survival = survival_rates[gender1][age1] + survival_rates[gender2][age2] - (survival_rates[gender1][age1] * survival_rates[gender2][age2])
-            
-            ith_ver_proj = ver_survival[gender1][min(age1,age2)]
-            ith_ver_proj[~rational_ver] = 1
-            
-            ith_ver_rate = ver_rates[gender1][age1]
+            ith_ver_proj = ver_survival[gender1][min_age]
+            ith_ver_proj[~rational_ver] = 1 
+            ith_ver_rate = ver_rates[gender1][min_age]
             ith_ver_rate[~rational_ver] = 0
        
+            ith_mort_survival = survival_rates[gender1][age1] + survival_rates[gender2][age2] - (survival_rates[gender1][age1] * survival_rates[gender2][age2])
             ith_decrement_proj = (ith_mort_survival[:-1] - ith_mort_survival[1:]) * ith_ver_proj[:-1]
             ith_decrement_proj = np.insert(ith_decrement_proj,0,0)
-       
-            #ith_decrement_proj = decrement_rates[gender1][age1] * decrement_rates[gender2][age2]
+            ith_mortality_rate = 1 - ith_mort_survival[1:]/ith_mort_survival[:-1]
+            ith_mortality_rate = np.append(0,np.nan_to_num(ith_mortality_rate, nan=1))
+            
+            
+        #Allow for settlement delay
+        ith_decrement_proj = np.pad(ith_decrement_proj , int((freq/12)*set_delay_mort), mode = 'constant', constant_values = 0)
+        ith_decrement_proj = ith_decrement_proj[:proj_term]
+        ith_mortality_rate = np.pad(ith_mortality_rate , int((freq/12)*set_delay_mort), mode = 'constant', constant_values = 0)
+        ith_mortality_rate = ith_mortality_rate[:proj_term]
         
+        #This might need changing to allow for differnt VER and Mort settlement delay periods
+        ith_mort_survival =  np.pad(ith_mort_survival , int((freq/12)*set_delay_mort), mode = 'constant', constant_values = 1)
+        ith_mort_survival = ith_mort_survival[:proj_term]
         
-        
+        ith_ver_rate = np.pad(ith_ver_rate , int((freq/12)*set_delay_ver), mode = 'constant', constant_values = 0)
+        ith_ver_rate = ith_ver_rate[:proj_term]
+        ith_ver_proj = np.pad(ith_ver_proj , int((freq/12)*set_delay_ver), mode = 'constant', constant_values = 1)
+        ith_ver_proj = ith_ver_proj[:proj_term]
         
         if valuation_method == 'Fitch':
-            ith_outstanding_olb_sop = ith_olb_proj[:] * ith_mort_survival[:]
+  
+            ith_outstanding_olb_sop = ith_olb_proj[:] * ith_mort_survival[:] * ith_ver_proj
             ith_outstanding_olb_sop = np.append(0, ith_outstanding_olb_sop[:-1])
             accrued_interest = ith_outstanding_olb_sop * ith_aer
-            mortality_cfs = (ith_outstanding_olb_sop + accrued_interest) * ith_mortality_rate
-            ver_cfs = (ith_outstanding_olb_sop + accrued_interest) * ith_ver_rate * (1 - ith_mortality_rate)
             
+            ver_cfs = (ith_outstanding_olb_sop + accrued_interest) * ith_ver_rate * (1 - ith_mortality_rate) 
+ 
+            #a = compute_recovery_olb(ith_olb_proj, ith_aer, ver_cfs, proj_term )
+ 
+            i_0 = ith_olb_proj[0]
+            list = [i_0]
+            for i in range(proj_term-1):
+                result = (i_0 * (1 + ith_aer)) - ver_cfs[i+1]
+                list.append(result)
+                i_0 = result
+                
+            recovery_olb = np.array(list + ver_cfs[:])
+            recovery_rate = np.minimum((ith_prop_proj[:]) / (recovery_olb),1)
+            #recovery_rate = np.pad(recovery_rate,(1,0) , mode='constant', constant_values = 1)
             
-            service_fee_cfs = np.arange(0,601)
+            rational_ver = recovery_olb[:] < ith_prop_proj[:]
         
+            offset_mask = np.roll(rational_ver, 1)
+            offset_mask[0] = True  
+            
+            ith_ver_rate[~offset_mask] = 0
+
+            #ith_ver_rate[~rational_ver] = 0 
+            
+            ver_cfs = (ith_outstanding_olb_sop + accrued_interest) * ith_ver_rate * (1 - ith_mortality_rate) 
+            
+            
+            mortality_cfs = (ith_outstanding_olb_sop + accrued_interest) * ith_mortality_rate * recovery_rate
+            
+            service_fee_cfs = (ith_outstanding_olb_sop + accrued_interest) * ith_service_fee/freq
+            
+
         
         
         elif valuation_method == 'Conservative' or 'Moodys':
-        
-
             #Calculate Mortality Cashflows
-            mortality_cfs = ith_olb_proj_nneg * ith_decrement_proj
+            mortality_cfs = ith_olb_proj_nneg * ith_decrement_proj           
             mortality_cfs = np.nan_to_num(mortality_cfs)
-            
-            
-          
+
             #Calculate Prepayment Cashflows
             initial_ver_rate = ([ith_mort_survival[0] * ith_ver_rate[0]])
-            ver_rate = np.concatenate([initial_ver_rate,ith_ver_proj[:-1] * ith_mort_survival[1:] * ith_ver_rate[1:]])         
+            ver_rate = np.concatenate([initial_ver_rate,ith_ver_proj[:-1] * ith_mort_survival[1:] * ith_ver_rate[1:]])  
             ver_cfs = pd.Series(ver_rate * ith_olb_proj_nneg)
-    
-    
-            #Allow for settlement delay
-            mortality_cfs = np.pad(mortality_cfs, int((freq/12)*set_delay), mode = 'constant', constant_values = 0)
-            mortality_cfs = mortality_cfs[:proj_term]
-            ver_cfs = np.pad(ver_cfs, int((freq/12)*set_delay), mode = 'constant', constant_values = 0)
-            ver_cfs = ver_cfs[:proj_term]
-            
+
             #Calculate servicing fee cashflows
             service_fee_cfs = ith_olb_proj[1:] * ith_mort_survival[:-1] * ith_ver_proj[:-1] * ith_service_fee/freq
             service_fee_cfs = np.insert(service_fee_cfs, 0, 0)
             service_fee_cfs = pd.Series(service_fee_cfs)[:proj_term]
     
-            
+
         #Calculate OLB after allowing for decrements
         ith_outstanding_olb = ith_olb_proj * ith_mort_survival
             
@@ -518,16 +566,7 @@ for j in range(len(runlist)):
     
     
         
-
-        
-          
-        
-        
-        
-
-
-
-    
+ 
 #########################################
 
 #Output results to an excel document
@@ -542,9 +581,8 @@ with pd.ExcelWriter("output.xlsx", engine = 'xlsxwriter') as writer:
     olb_output = pd.DataFrame(olb_output_dictionary)
     olb_output.to_excel(writer, sheet_name="OLB")
 
-
-
-
+#Plot output
+'''
 chart_dict = {}
 for i in range(len(runlist)):
     plt.Figure(figsize=(10,6))
@@ -560,11 +598,7 @@ for i in range(len(runlist)):
     plt.ylabel('Cashflows')
     chart_dict[f'{runlist[i]}'] = fig
 
-
-
-
-
-#os.chdir('C:/Users/UG423NJ/OneDrive - EY/Documents/GitHub/ERM_Projection')
+'''
 
 #Open the workbook
 #import xlwings as xw
@@ -576,4 +610,5 @@ execution_time = end_time - start_time
 
 print(f"Script executed in {execution_time:.2f} seconds")
 
+print(sum(mortality_cfs + ver_cfs  -service_fee_cfs))
 
